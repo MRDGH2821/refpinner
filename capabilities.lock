@@ -1,0 +1,101 @@
+version: 1
+generator: capa@2.4.0
+generatedAt: '2026-11-12T21:54:57.583Z'
+skills:
+  - id: atomic-commits
+    source: github
+    repo: nullswan/atomic-commits
+    skillName: atomic-commits
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: b1428499726d0efd3b2c914e58a7279c707538e0
+    resolvedVersion: null
+  - id: bootstrap
+    source: github
+    repo: infragate/capa
+    skillName: bootstrap
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: d7af1197d4214599b8143794212b6094c9096d99
+    resolvedVersion: v2.4.0
+  - id: capabilities-manager
+    source: github
+    repo: infragate/capa
+    skillName: capabilities-manager
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: d7af1197d4214599b8143794212b6094c9096d99
+    resolvedVersion: v2.4.0
+  - id: gh
+    source: github
+    repo: cli/cli
+    skillName: gh
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: 3d5a9e355a837f2f5ee78d7484c118cc1342ad1a
+    resolvedVersion: v2.104.0
+  - id: git-commit
+    source: github
+    repo: github/awesome-copilot
+    skillName: git-commit
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: 30a0d7465b14b05e05949d6588b99f7af0c537b4
+    resolvedVersion: null
+plugins:
+  - id: caveman
+    source: github
+    repo: JuliusBrussee/caveman
+    subpath: null
+    requestedSearchName: null
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: 1e91f1306d602d4ca23618701b1185575ae1869b
+    resolvedVersion: v4.1.0
+    manifestName: caveman
+    manifestVersion: 4.1.0
+  - id: mattpocock-skills
+    source: github
+    repo: mattpocock/skills
+    subpath: null
+    requestedSearchName: null
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: d1478fcb140db0b93c0c8df17bcfd311844749d0
+    resolvedVersion: v1.3.2
+    manifestName: mattpocock-skills
+    manifestVersion: 1.3.2
+  - id: megalinter
+    source: github
+    repo: oxsecurity/megalinter
+    subpath: null
+    requestedSearchName: null
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: f2fe8c1cba37091848df3e524066c8c23ef353ed
+    resolvedVersion: v10.2.0
+    manifestName: megalinter
+    manifestVersion: 1.0.27
+  - id: paad
+    source: github
+    repo: Ovid/paad
+    subpath: plugins/paad
+    requestedSearchName: null
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: 296b0c58bc20131bcc84661fed1febb3f189f43f
+    resolvedVersion: null
+    manifestName: paad
+    manifestVersion: 2.1.0
+  - id: ponytail
+    source: github
+    repo: DietrichGebert/ponytail
+    subpath: null
+    requestedSearchName: null
+    requestedVersion: null
+    requestedRef: null
+    resolvedRef: 7801d061243d7b753bad0e0b3c057cd250b11755
+    resolvedVersion: v5.3.3
+    manifestName: ponytail
+    manifestVersion: 5.3.3
+hooks: []
