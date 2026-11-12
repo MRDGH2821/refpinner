@@ -1,0 +1,187 @@
+---
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.ref }}-${{ github.workflow }}
+# Comment env block if you do not want to apply fixes
+env:
+  # Apply linter fixes configuration
+  #
+  # When active, APPLY_FIXES must also be defined as environment variable
+  # (in github/workflows/mega-linter.yml or other CI tool)
+  APPLY_FIXES: all
+  # Decide which event triggers application of fixes in a commit or a PR
+  # (pull_request, push, all)
+  APPLY_FIXES_EVENT: pull_request
+  # If APPLY_FIXES is used, defines if the fixes are directly committed (commit)
+  # or posted in a PR (pull_request)
+  APPLY_FIXES_MODE: pull_request
+jobs:
+  megalinter:
+    name: MegaLinter
+    # Give the default GITHUB_TOKEN write permission to commit and push, comment
+    # issues, and post new Pull Requests; remove the ones you do not need
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      # Git Checkout
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # If you use VALIDATE_ALL_CODEBASE = true, you can remove this line to
+          # improve performance
+          fetch-depth: 0
+          # Comment this line and uncomment the next one if you use APPLY_FIXES
+          # persist-credentials: false
+          persist-credentials: true
+          # zizmor: ignore[artipacked]
+          # SECURITY NOTE: Using a Personal Access Token (PAT) is NOT
+          # recommended. Open-source projects have been heavily targeted by
+          # supply-chain attacks in recent months, and a leaked PAT can give
+          # attackers broad write access to your repository — better safe
+          # than sorry! If you only need workflows to re-trigger after
+          # MegaLinter applies fixes, prefer one of these safer alternatives:
+          #   - Manually re-run the workflow from the GitHub Actions tab, or
+          #   - Push another commit on the branch to trigger workflows again.
+          # Only define `secrets.PAT` if you fully understand the trade-off.
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+      # MegaLinter
+      # All available variables are described in documentation
+      # https://megalinter.io/latest/config-file/
+      - env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uncomment to use ApiReporter (Grafana)
+          # API_REPORTER: true
+          # API_REPORTER_URL: ${{ secrets.API_REPORTER_URL }}
+          # API_REPORTER_BASIC_AUTH_USERNAME: ${{ secrets.API_REPORTER_BASIC_AUTH_USERNAME }}
+          # API_REPORTER_BASIC_AUTH_PASSWORD: ${{ secrets.API_REPORTER_BASIC_AUTH_PASSWORD }}
+          # API_REPORTER_METRICS_URL: ${{ secrets.API_REPORTER_METRICS_URL }}
+          # API_REPORTER_METRICS_BASIC_AUTH_USERNAME: ${{ secrets.API_REPORTER_METRICS_BASIC_AUTH_USERNAME }}
+          # API_REPORTER_METRICS_BASIC_AUTH_PASSWORD: ${{ secrets.API_REPORTER_METRICS_BASIC_AUTH_PASSWORD }}
+          # API_REPORTER_DEBUG: false
+
+          # ADD YOUR CUSTOM ENV VARIABLES HERE TO OVERRIDE VALUES OF
+          # .mega-linter.yml AT THE ROOT OF YOUR REPOSITORY
+
+          # Disable LLM Advisor for bot PRs (dependabot, renovate, etc.)
+          LLM_ADVISOR_ENABLED: |-
+            ${{
+              github.event_name != 'pull_request' ||
+              (github.event.pull_request.user.login != 'dependabot[bot]' &&
+                github.event.pull_request.user.login != 'renovate[bot]' &&
+                github.event.pull_request.user.login != 'github-actions[bot]' &&
+                !startsWith(github.event.pull_request.user.login, 'dependabot') &&
+                !startsWith(github.event.pull_request.user.login, 'renovate'))
+            }}
+          # Validates all source when push on main, else just the git diff with
+          # main. Override with true if you always want to lint all sources
+          #
+          # To validate the entire codebase, set to:
+          # VALIDATE_ALL_CODEBASE: true
+          #
+          # To validate only diff with main, set to:
+          # VALIDATE_ALL_CODEBASE: >-
+          #   ${{
+          #     github.event_name == 'push' &&
+          #     github.ref == 'refs/heads/main'
+          #   }}
+          VALIDATE_ALL_CODEBASE: true
+        id: ml
+        name: MegaLinter
+        # You can override MegaLinter flavor used to have faster performances
+        # More info at https://megalinter.io/latest/flavors/
+        uses: oxsecurity/megalinter@f2fe8c1cba37091848df3e524066c8c23ef353ed # v10.2.0
+      # Upload MegaLinter artifacts
+      - if: success() || failure()
+        name: Archive production artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          include-hidden-files: "true"
+          name: MegaLinter reports
+          path: |
+            megalinter-reports
+            mega-linter.log
+      # Create pull request if applicable
+      # (for now works only on PR from same repository, not from forks)
+      - id: cpr
+        if: |-
+          steps.ml.outputs.has_updated_sources == 1 && (
+            env.APPLY_FIXES_EVENT == 'all' ||
+            env.APPLY_FIXES_EVENT == github.event_name
+          ) && env.APPLY_FIXES_MODE == 'pull_request' && (
+            github.event_name == 'push' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+          ) && !contains(github.event.head_commit.message, 'skip fix')
+        name: Create Pull Request with applied fixes
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3, 2026-11-10
+        with:
+          commit-message: "chore(megalinter): apply linters automatic fixes"
+          labels: bot
+          sign-commits: true
+          title: "chore(megalinter): apply linters automatic fixes"
+          # SECURITY NOTE: see the warning on the checkout step above —
+          # using `secrets.PAT` is NOT recommended for security reasons.
+          # Prefer manually re-running the workflow or pushing another
+          # commit on the branch to trigger workflows again.
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+      - env:
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+        if: |-
+          steps.ml.outputs.has_updated_sources == 1 && (
+            env.APPLY_FIXES_EVENT == 'all' ||
+            env.APPLY_FIXES_EVENT == github.event_name
+          ) && env.APPLY_FIXES_MODE == 'pull_request' && (
+            github.event_name == 'push' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+          ) && !contains(github.event.head_commit.message, 'skip fix')
+        name: Create PR output
+        run: |
+          echo "PR Number - ${PR_NUMBER}"
+          echo "PR URL - ${PR_URL}"
+      # Push new commit if applicable
+      # (for now works only on PR from same repository, not from forks)
+      - if: |-
+          steps.ml.outputs.has_updated_sources == 1 && (
+            env.APPLY_FIXES_EVENT == 'all' ||
+            env.APPLY_FIXES_EVENT == github.event_name
+          ) && env.APPLY_FIXES_MODE == 'commit' && github.ref != 'refs/heads/main' && (
+            github.event_name == 'push' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+          ) && !contains(github.event.head_commit.message, 'skip fix')
+        name: Prepare commit
+        run: sudo chown -Rc $UID .git/
+      - if: |-
+          steps.ml.outputs.has_updated_sources == 1 && (
+            env.APPLY_FIXES_EVENT == 'all' ||
+            env.APPLY_FIXES_EVENT == github.event_name
+          ) && env.APPLY_FIXES_MODE == 'commit' && github.ref != 'refs/heads/main' && (
+            github.event_name == 'push' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+          ) && !contains(github.event.head_commit.message, 'skip fix')
+        name: Commit and push applied linter fixes
+        uses: stefanzweifel/git-auto-commit-action@d0b01107b5db882071f96de5dd4b54961ea93f4c # v7.2.1
+        with:
+          branch: |-
+            ${{
+              github.event.pull_request.head.ref ||
+              github.head_ref ||
+              github.ref
+            }}
+          commit_message: "chore(megalinter): apply linters fixes"
+          commit_user_email: 129584137+megalinter-bot@users.noreply.github.com
+          commit_user_name: megalinter-bot
+name: MegaLinter
+# Trigger mega-linter at every push. Action will also be visible from
+# Pull Requests to main
+on: # ryl disable-line rule:truthy
+  pull_request:
+    branches:
+      - main
+      - master
+  # Comment this line to trigger action only on pull-requests
+  # (not recommended if you don't pay for GH Actions)
+  push:
+permissions: {}

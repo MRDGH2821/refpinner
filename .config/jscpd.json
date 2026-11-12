@@ -1,0 +1,27 @@
+{
+  "gitignore": true,
+  "ignore": [
+    "**/*.svg",
+    "**/*cache*/**",
+    "**/.git/**",
+    "**/.github/**",
+    "**/.idea/**",
+    "**/.mise/**",
+    "**/.rbenv/**",
+    "**/.venv/**",
+    "**/locks/**",
+    "**/mise/locks/**",
+    "**/node_modules/**",
+    "**/report/**",
+    "*.lock",
+    ".agents/research/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "go.sum",
+    "npm-shrinkwrap.json",
+    "package-lock.json",
+    "pnpm-lock.yaml"
+  ],
+  "reporters": ["html", "markdown"],
+  "threshold": 0
+}

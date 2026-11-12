@@ -1,0 +1,20 @@
+[MD007]
+indent = 2
+style = "fixed"
+
+[MD013]
+line-length = 400
+
+[MD024]
+siblings-only = true
+
+[MD026]
+punctuation = ".,;:!。，；:"
+
+[global]
+# tombi: format.rules.array-values-order = "ascending"
+disable = ["MD004", "MD029", "MD033", "MD036"]
+editorconfig = true
+# tombi: format.rules.array-values-order = "ascending"
+exclude = ["**/.agents/skills/**", "AGENTS.md", "CLAUDE.md"]
+extend-enable = ["MD047"]

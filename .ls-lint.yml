@@ -1,0 +1,42 @@
+---
+# .ls-lint.yml
+# File naming conventions based on official/authoritative style guides:
+#   Nix        → kebab-case   (nixpkgs coding conventions)
+#   Rust       → snake_case   (Rust RFC 430 / API Guidelines)
+#   Python     → snake_case   (PEP 8)
+#   JavaScript → kebab-case   (eslint-plugin-unicorn default)
+#   TypeScript → kebab-case   (align with JavaScript / eslint-plugin-unicorn)
+#   Java       → PascalCase   (Oracle Code Conventions — must match class name)
+# ── Ignored paths ─────────────────────────────────────────────────────────
+ignore:
+  # keep-sorted start
+  - "**/.agents/**"
+  - "**/.claude/**"
+  - "**/.codex/**"
+  - "**/.cursor/**"
+  - "**/.opencode/**"
+  - "**/.worktrees/**"
+  - .git
+  - .gradle
+  - .pytest_cache
+  - .venv
+  - .worktrees
+  - __pycache__
+  - apm_modules
+  - build
+  - dist
+  - node_modules
+  - result # Nix build result symlink
+  - target # Rust/Java build output
+  - venv
+  # keep-sorted end
+ls:
+  .cjs: kebab-case
+  .d.ts: kebab-case
+  .java: PascalCase
+  .js: kebab-case
+  .mjs: kebab-case
+  .nix: kebab-case
+  .py: snake_case
+  .rs: snake_case
+  .ts: kebab-case

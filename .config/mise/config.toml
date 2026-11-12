@@ -1,0 +1,89 @@
+[deps.bun]
+auto = true
+
+
+[deps.capabilities]
+auto = true
+description = "Install Agent plugins"
+# tombi: format.rules.array-values-order = "ascending"
+outputs = [
+  ".agents/skills/",
+  ".claude/",
+  ".codex/",
+  ".cursor/",
+  ".kiro/",
+  ".mcp.json",
+  "capabilities.lock"
+]
+run = "capa install --yes"
+# tombi: format.rules.array-values-order = "ascending"
+sources = [
+  ".config/capabilities/",
+  "capabilities.yaml",
+  "template/.config/capabilities/"
+]
+
+
+[env]
+HK_MISE = 1
+
+[hooks]
+# Automatically install/update git hooks when tools are installed.
+# Then reconcile agent capabilities — capa is installed as a mise tool, so it
+# is guaranteed present by the time postinstall runs.
+postinstall = ["hk install --mise", { task = "ai-setup" }]
+
+[settings]
+experimental = true
+lockfile = true
+lockfile_auto_prune = true
+
+[settings.github]
+use_git_credentials = true
+
+[tasks]
+
+ai-setup = "capa install --yes"
+
+check = ["hk check --all", "cog check"]
+prepare-ci = ["bun ci"]
+
+[tasks.format]
+alias = "fmt"
+run = ["hk fix --all"]
+
+[tasks.prepare]
+interactive = true
+run = ["bun install", { task = "ai-setup" }]
+
+[tools]
+"aqua:google/keep-sorted" = "0.10.0"
+"aqua:owenlamont/ryl" = "0.29.0"
+betterleaks = "1.10.0"
+bun = "1.4.4"
+cocogitto = "7.0.0"
+cspell = "10.4.1"
+editorconfig-checker = "4.0.2"
+
+
+gh = "2.103.3"
+
+git-cliff = "2.14.2"
+
+"github:MRDGH2821/Sort-Markdown-Tables" = "0.6.0"
+
+
+"github:infragate/capa" = "2.4.0"
+
+hk = { version = "2.12.0", workflow = "release.yml" }
+ls-lint = "2.3.2"
+oxfmt = "0.78.0"
+pkl = "0.33.0"
+"pypi:lorenzwalthert/gitignore-tidy" = "latest"
+"pypi:toml-sort" = "0.25.0"
+python = "latest"
+rumdl = "0.3.2"
+tombi = "1.11.2"
+typos = "1.52.1"
+uv = "0.13.7"
+yq = "4.54.3"

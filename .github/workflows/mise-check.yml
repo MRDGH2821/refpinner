@@ -1,0 +1,28 @@
+---
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.ref }}-${{ github.workflow }}
+jobs:
+  mise-check:
+    name: Mise Check
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          cache: true
+      - run: mise run prepare-ci
+      - run: mise run check
+name: Mise Check
+on: # ryl disable-line rule:truthy
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+  push:
+permissions: {}

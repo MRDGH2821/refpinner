@@ -1,0 +1,172 @@
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+
+import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
+
+
+local sorters = new Group {
+  steps {
+    ["cspell-sort"] {
+      glob =
+        List(
+          "**/.cSpell*",
+          "**/.cspell*",
+          "**/cSpell*",
+          "**/cspell*",
+          ".cSpell*",
+          ".cspell*",
+          "cSpell*",
+          "cspell*",
+        )
+      fix =
+        """
+        failed=0
+        for f in {{ files }}; do
+        yq -i '.words|= sort_by(downcase)|.ignorePaths|=sort_by(downcase)' "$f" || failed=1
+        done
+        exit $failed
+        """
+    }
+    ["jscpd-sort"] {
+      glob = List("**/.jscpd*", "**/jscpd*", ".jscpd*", "jscpd*")
+      fix =
+        """
+        failed=0
+        for f in {{ files }}; do
+        yq -i '.ignore|= sort_by(downcase)|.reporters|=sort_by(downcase)' "$f" || failed=1
+        done
+        exit $failed
+        """
+    }
+    ["keep-sorted"] {
+      check = "keep-sorted --mode lint {{files}}"
+      fix = "keep-sorted --mode fix {{files}}"
+    }
+    ["toml-sort"] {
+      check = "toml-sort --check --sort-table-keys --sort-inline-tables {{files}}"
+      exclude = List("**/tombi.toml")
+      fix = "toml-sort --in-place --sort-table-keys --sort-inline-tables {{files}}"
+      types = List("toml")
+    }
+    ["key-sort"] {
+      fix =
+        """
+        failed=0
+        for f in {{ files }}; do
+        yq -iP 'sort_keys(..)' "$f" || failed=1
+        done
+        exit $failed
+        """
+      types = List("json")
+    }
+    ["gitignore-tidy"] {
+      check = "gitignore-tidy {{files}}"
+      fix = "gitignore-tidy {{files}}"
+      glob = List("**/.*ignore", ".*ignore")
+    }
+  }
+}
+
+local secret_linters = new Group {
+  steps {
+    ["betterleaks"] = Builtins.betterleaks
+    ["detect-private-key"] = Builtins.detect_private_key
+  }
+}
+
+local config_linters = new Group {
+  steps {
+    ["pkl"] = Builtins.pkl
+    ["pkl_format"] = Builtins.pkl_format
+    ["tombi"] = (Builtins.tombi) { depends = "tombi_format" }
+    ["tombi_format"] = Builtins.tombi_format
+  }
+}
+
+local misc_linters = new Group {
+  steps {
+    ["check_merge_conflict"] = Builtins.check_merge_conflict
+    ["check_shebang_scripts_are_executable"] = Builtins.check_shebang_scripts_are_executable
+    ["check-placeholders"] {
+      check =
+        "if grep -EIn '(<placeholder>|CHANGEME|FILL_ME_IN|NOCOMMIT)' {{files}}; then false; else test $? -eq 1; fi"
+      exclude = List("template/**", ".config/hk.pkl", ".config/cspell.json")
+    }
+    ["ls_lint"] = Builtins.ls_lint
+
+  }
+}
+
+local text_linters = new Group {
+  steps {
+    ["fix_smart_quotes"] = Builtins.fix_smart_quotes
+    ["rumdl"] = (Builtins.rumdl) { depends = List("rumdl_format") }
+    ["rumdl_format"] = Builtins.rumdl_format
+    ["ryl"] = Builtins.ryl
+    ["ryl_markdown"] = Builtins.ryl_markdown
+    ["sort-markdown-tables"] {
+      check = "smt --check {{files}}"
+      fix = "smt --in-place {{files}}"
+      types = List("markdown")
+    }
+  }
+}
+
+local style_linters = new Group {
+  steps {
+    ["trailing-whitespace"] = Builtins.trailing_whitespace
+    ["newlines"] = Builtins.newlines
+    ["mixed_line_ending"] = Builtins.mixed_line_ending
+    ["editorconfig-checker"] = Builtins.editorconfig_checker
+  }
+}
+
+local spell_linters = new Group {
+  steps {
+    ["cspell"] {
+      check = "cspell --no-must-find-files --no-progress --no-summary --gitignore --files {{files}}"
+    }
+    ["typos"] = Builtins.typos
+  }
+}
+exclude =
+  List(
+    // keep-sorted start
+    "**/*.lock",
+    "**/.mise/**",
+    "**/go.sum",
+    "**/locks/**",
+    "**/mise/locks/**",
+    "**/npm-shrinkwrap.json",
+    "**/package-lock.json",
+    "**/pnpm-lock.yaml",
+    "AGENTS.md",
+    "CLAUDE.md"
+    // keep-sorted end
+  )
+
+steps = new Mapping<String, Step | Group> {
+  ["no_commit_to_branch"] = Builtins.no_commit_to_branch
+  ["sorters"] = sorters
+  ["config"] = config_linters
+  ["style"] = style_linters
+  ["text"] = text_linters
+  ["misc"] = misc_linters
+  ["secrets"] = secret_linters
+  ["spell"] = spell_linters
+  ["oxfmt"] = (Builtins.oxfmt) { depends = "keep-sorted"; exclusive = true }
+}
+
+hooks {
+  ["commit-msg"] {
+    steps {
+      ["check_conventional_commit"] = Builtins.check_conventional_commit
+      ["cocogitto_commit_msg"] = Builtins.cocogitto_commit_msg
+      ["cspell"] {
+        check =
+          "cspell --no-must-find-files --no-progress --no-summary --gitignore --files {{commit_msg_file}}"
+      }
+      ["typos"] = Builtins.typos
+    }
+  }
+}
+
