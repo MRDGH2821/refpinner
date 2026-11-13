@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -6,20 +7,24 @@ use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
 use crate::reference::{Reference, State};
 use crate::resolve::{GitHub, Resolution};
-use crate::{discover, github};
+use crate::{discover, github, write};
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
 /// Exit status when a file or reference could not be processed.
 const ERROR: u8 = 2;
 
-/// Previews pins for the unpinned references under `root` without writing files.
-pub fn run(root: &Path) -> ExitCode {
+/// Previews pins for the unpinned references under `root`.
+///
+/// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
+/// user picks each pin; otherwise every pin that resolved is applied.
+pub fn run(root: &Path, write: bool) -> ExitCode {
     let files = match discover::files(root) {
         Ok(files) => files,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
     let mut github = GitHub::from_env();
+    let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
     for file in files {
         let shown = display(file.strip_prefix(root).unwrap_or(&file));
@@ -41,6 +46,8 @@ pub fn run(root: &Path) -> ExitCode {
         let aliased = references
             .iter()
             .any(|r| r.state == State::Warning && r.text.starts_with("unsupported YAML "));
+        let mut chosen = Vec::new();
+        let mut values = Vec::new();
         for reference in &references {
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
             match reference.state {
@@ -60,15 +67,46 @@ pub fn run(root: &Path) -> ExitCode {
                 State::Unpinned => {}
             }
             match edits(&source, reference, &mut github) {
-                Ok(edits) => preview(&location, &source, reference, &edits),
+                Ok(edits) => {
+                    preview(&location, &source, reference, &edits);
+                    if write && (!interactive || confirm()) {
+                        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
+                        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
+                        let pinned = format!("{action}@{}", edits[0].text);
+                        values.push((reference.line, reference.column, pinned));
+                        chosen.extend(edits);
+                    }
+                }
                 Err(error) => {
                     eprintln!("refpinner: {location}: {}: {error}", reference.text);
                     status = ERROR;
                 }
             }
         }
+        if chosen.is_empty() {
+            continue;
+        }
+        match write::replace(&file, &source, &chosen, &values) {
+            Ok(backup) => println!(
+                "wrote {shown} (backup {})",
+                display(backup.strip_prefix(root).unwrap_or(&backup))
+            ),
+            Err(error) => {
+                eprintln!("refpinner: {shown}: not written: {error}");
+                status = ERROR;
+            }
+        }
     }
     ExitCode::from(status)
+}
+
+/// Asks whether to apply the pin just previewed; anything but `y` or `yes` declines.
+fn confirm() -> bool {
+    eprint!("apply this pin? [y/N] ");
+    let _ = io::stderr().flush();
+    let mut answer = String::new();
+    io::stdin().lock().read_line(&mut answer).is_ok()
+        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// Computes the edits that pin `reference` to the commit its revision names now.

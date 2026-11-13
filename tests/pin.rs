@@ -105,9 +105,13 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 fn pin(dir: &Path, forge: &Forge) -> Output {
+    refpinner(dir, forge, &["pin"])
+}
+
+fn refpinner(dir: &Path, forge: &Forge, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_refpinner"));
     command
-        .arg("pin")
+        .args(args)
         .current_dir(dir)
         .env("REFPINNER_GITHUB_API_URL", &forge.url);
     for proxy in [
@@ -447,4 +451,230 @@ fn reusable_workflows_and_composite_actions_are_previewed_and_warnings_are_not_r
         "+    uses: actions/setup-node/.github/workflows/build.yml@1111111111111111111111111111111111111111 # v4.2.1 (track: v4)\n"
     ));
     assert_eq!(forge.count("/repos/actions/setup-node/git/ref/tags/v4"), 1);
+}
+
+#[test]
+fn unattended_write_pins_file_keeps_exact_backup_and_reports_it() {
+    let workflow = concat!(
+        "# 日本語\r\n",
+        "jobs:\r\n",
+        "  a:\r\n",
+        "    steps:\r\n",
+        "      - uses: \"actions/setup-node@v4\"  # node\r\n",
+        "      - uses: owner/missing@v1\r\n",
+    );
+    let root = project("write", &[(".github/workflows/ci.yml", workflow)]);
+    let forge = Forge::new(&setup_node());
+
+    let output = refpinner(&root, &forge, &["pin", "--write"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "refpinner: .github/workflows/ci.yml:6:15: owner/missing@v1: no tag or branch named v1 in owner/missing\n"
+    );
+    assert!(
+        stdout(&output)
+            .ends_with("wrote .github/workflows/ci.yml (backup .github/workflows/ci.yml.bkp)\n"),
+        "{}",
+        stdout(&output)
+    );
+    let path = root.join(".github/workflows/ci.yml");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read workflow"),
+        concat!(
+            "# 日本語\r\n",
+            "jobs:\r\n",
+            "  a:\r\n",
+            "    steps:\r\n",
+            "      - uses: \"actions/setup-node@1111111111111111111111111111111111111111\" # v4.2.1 (track: v4)  # node\r\n",
+            "      - uses: owner/missing@v1\r\n",
+        )
+    );
+    assert_eq!(
+        std::fs::read(root.join(".github/workflows/ci.yml.bkp")).expect("read backup"),
+        workflow.as_bytes()
+    );
+}
+
+#[test]
+fn backup_takes_next_free_number_skips_symlinks_keeps_permissions_and_repeat_run_writes_nothing() {
+    let workflow = "jobs:\n  a:\n    steps:\n      - uses: actions/setup-node@v4\n";
+    let root = project(
+        "numbered",
+        &[
+            (".github/workflows/ci.yml", workflow),
+            (".github/workflows/ci.yml.bkp", "older backup\n"),
+        ],
+    );
+    let dir = root.join(".github/workflows");
+    let target = root.join("outside.txt");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("ci.yml"), std::fs::Permissions::from_mode(0o640))
+            .expect("set permissions");
+        // A dangling symlink is still an occupied name and must not be followed.
+        std::os::unix::fs::symlink(&target, dir.join("ci.yml.bkp2")).expect("symlink");
+    }
+    let expected = if cfg!(unix) {
+        "ci.yml.bkp3"
+    } else {
+        "ci.yml.bkp2"
+    };
+    let forge = Forge::new(&setup_node());
+
+    let output = refpinner(&root, &forge, &["pin", "--write"]);
+
+    assert_eq!(stderr(&output), "");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stdout(&output).ends_with(&format!(
+            "wrote .github/workflows/ci.yml (backup .github/workflows/{expected})\n"
+        )),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(expected)).expect("read backup"),
+        workflow
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("ci.yml.bkp")).expect("read older backup"),
+        "older backup\n"
+    );
+    assert!(!target.exists(), "backup must not follow the symlink");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["ci.yml", expected] {
+            let mode = std::fs::metadata(dir.join(name))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o640, "{name}");
+        }
+    }
+
+    let again = refpinner(&root, &forge, &["pin", "--write"]);
+
+    assert_eq!(again.status.code(), Some(0));
+    assert_eq!(stdout(&again), "");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("list workflows")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    let mut want = vec!["ci.yml", "ci.yml.bkp", expected];
+    if cfg!(unix) {
+        want.insert(2, "ci.yml.bkp2");
+    }
+    assert_eq!(names, want);
+}
+
+/// A read-only directory makes the backup fail; root ignores directory permissions.
+#[cfg(unix)]
+#[test]
+fn failed_backup_leaves_original_unchanged_and_other_files_are_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let workflow = "jobs:\n  a:\n    steps:\n      - uses: actions/setup-node@v4\n";
+    let root = project(
+        "readonly",
+        &[
+            (".github/workflows/ci.yml", workflow),
+            (".github/actions/build/action.yml", workflow),
+        ],
+    );
+    let locked = root.join(".github/actions/build");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).expect("lock");
+    if std::fs::write(locked.join("probe"), "").is_ok() {
+        return;
+    }
+    let forge = Forge::new(&setup_node());
+
+    let output = refpinner(&root, &forge, &["pin", "--write"]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("unlock");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).starts_with(
+            "refpinner: .github/actions/build/action.yml: not written: cannot create backup: "
+        ),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(locked.join("action.yml")).expect("read action"),
+        workflow
+    );
+    assert!(
+        stdout(&output)
+            .ends_with("wrote .github/workflows/ci.yml (backup .github/workflows/ci.yml.bkp)\n"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// util-linux `script` gives refpinner a terminal; other platforms lack a portable pty.
+#[cfg(target_os = "linux")]
+#[test]
+fn interactive_write_applies_only_the_selected_pins() {
+    use std::process::Stdio;
+    let workflow = concat!(
+        "jobs:\n",
+        "  a:\n",
+        "    steps:\n",
+        "      - uses: actions/setup-node@v4\n",
+        "      - uses: owner/tool@v1.2.3\n",
+    );
+    let root = project("interactive", &[(".github/workflows/ci.yml", workflow)]);
+    let mut routes = setup_node();
+    routes.push((
+        "/repos/owner/tool/git/ref/tags/v1.2.3",
+        200,
+        r#"{"ref":"refs/tags/v1.2.3","object":{"sha":"5555555555555555555555555555555555555555","type":"commit"}}"#,
+    ));
+    let forge = Forge::new(&routes);
+    let command = format!("{} pin --write", env!("CARGO_BIN_EXE_refpinner"));
+    let Ok(mut child) = Command::new("script")
+        .args(["-qec", &command, "/dev/null"])
+        .current_dir(&root)
+        .env("REFPINNER_GITHUB_API_URL", &forge.url)
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return;
+    };
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"n\ny\n")
+        .expect("answer prompts");
+    let output = child.wait_with_output().expect("run script");
+
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert_eq!(stdout(&output).matches("apply this pin? [y/N]").count(), 2);
+    assert_eq!(
+        std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read workflow"),
+        concat!(
+            "jobs:\n",
+            "  a:\n",
+            "    steps:\n",
+            "      - uses: actions/setup-node@v4\n",
+            "      - uses: owner/tool@5555555555555555555555555555555555555555 # v1.2.3\n",
+        )
+    );
 }
