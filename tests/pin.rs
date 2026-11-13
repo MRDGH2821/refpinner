@@ -618,3 +618,41 @@ fn interactive_write_applies_only_the_selected_pins() {
         )
     );
 }
+
+#[test]
+fn pin_discovers_nested_projects_and_skips_backups() {
+    let workflow = "jobs:\n  a:\n    steps:\n      - uses: actions/setup-node@v4\n";
+    let root = project(
+        "discover",
+        &[
+            ("team/app/.github/workflows/ci.yml", workflow),
+            ("team/app/.github/workflows/ci.yml.bkp", workflow),
+        ],
+    );
+    let forge = Forge::new(&setup_node());
+
+    let output = refpinner(&root, &forge, &["pin", "--path", "team"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            "app/.github/workflows/ci.yml:4:15: actions/setup-node@v4\n",
+            "-      - uses: actions/setup-node@v4\n",
+            "+      - uses: actions/setup-node@1111111111111111111111111111111111111111 # v4.2.1 (track: v4)\n",
+        )
+    );
+}
+
+#[test]
+fn empty_preview_succeeds() {
+    let root = project("empty-preview", &[("README.md", "no CI here\n")]);
+    let forge = Forge::new(&[]);
+
+    let output = pin(&root, &forge);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(stderr(&output), "");
+    assert_eq!(forge.total(), 0);
+}

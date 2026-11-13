@@ -1,25 +1,26 @@
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::Path;
 use std::process::ExitCode;
 
+use crate::discover::Scan;
 use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
 use crate::reference::{Reference, State};
 use crate::resolve::{GitHub, Resolution};
-use crate::{discover, github, write};
+use crate::{github, write};
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
 /// Exit status when a file or reference could not be processed.
 const ERROR: u8 = 2;
 
-/// Previews pins for the unpinned references under `root`.
+/// Previews pins for the unpinned references in the files selected by `scan`.
 ///
 /// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
 /// user picks each pin; otherwise every pin that resolved is applied.
-pub fn run(root: &Path, write: bool) -> ExitCode {
-    let files = match discover::files(root) {
+pub fn run(scan: &Scan, write: bool) -> ExitCode {
+    let root = &scan.path;
+    let files = match scan.files() {
         Ok(files) => files,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
