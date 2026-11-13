@@ -55,13 +55,13 @@ pub fn run(root: &Path) -> ExitCode {
     ExitCode::from(status)
 }
 
-fn fail(message: &str) -> ExitCode {
+pub fn fail(message: &str) -> ExitCode {
     eprintln!("refpinner: {message}");
     ExitCode::from(ERROR)
 }
 
 /// Formats a relative path with `/` separators so output is identical on every platform.
-fn display(path: &Path) -> String {
+pub fn display(path: &Path) -> String {
     path.components()
         .map(|part| part.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

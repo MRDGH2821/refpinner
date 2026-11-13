@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 /// A dependency reference found in a CI file, as written in the source.
 pub struct Reference {
     /// 1-based line of the reference value.
@@ -8,4 +10,6 @@ pub struct Reference {
     pub text: String,
     /// Whether the reference names an immutable revision.
     pub pinned: bool,
+    /// Byte range of the value in the source, including any quotes.
+    pub span: Range<usize>,
 }
