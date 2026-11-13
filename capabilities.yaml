@@ -2,6 +2,9 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/infragate/capa/main/schema/capabilities.schema.json
 agents:
   additional:
+    - id: agent-skills
+      path: .config/capabilities/instructions/agent-skills.md
+      type: local
     - id: template-context
       path: .config/capabilities/instructions/template.md
       type: local
@@ -49,10 +52,6 @@ plugins:
       repo: oxsecurity/megalinter
     id: megalinter
     type: github
-
-
-
-
 
 providers:
   # keep-sorted start
