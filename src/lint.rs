@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{discover, github};
+use crate::discover::Scan;
+use crate::github;
 
 /// Exit status when every reference is pinned.
 const OK: u8 = 0;
@@ -11,9 +12,10 @@ const UNPINNED: u8 = 1;
 /// Exit status when the scan was incomplete: no files found, or a file could not be read.
 const ERROR: u8 = 2;
 
-/// Lints the CI files under `root` offline and prints one line per reference.
-pub fn run(root: &Path) -> ExitCode {
-    let files = match discover::files(root) {
+/// Lints the files selected by `scan` offline and prints one line per reference.
+pub fn run(scan: &Scan) -> ExitCode {
+    let root = &scan.path;
+    let files = match scan.files() {
         Ok(files) if !files.is_empty() => files,
         Ok(_) => {
             return fail(&format!(
@@ -61,7 +63,7 @@ fn fail(message: &str) -> ExitCode {
 }
 
 /// Formats a relative path with `/` separators so output is identical on every platform.
-fn display(path: &Path) -> String {
+pub fn display(path: &Path) -> String {
     path.components()
         .map(|part| part.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

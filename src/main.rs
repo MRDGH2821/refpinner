@@ -3,7 +3,6 @@ mod github;
 mod lint;
 mod reference;
 
-use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -18,11 +17,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Report pinned and unpinned references without network access
-    Lint,
+    Lint(discover::Scan),
 }
 
 fn main() -> ExitCode {
     match Cli::parse().command {
-        Command::Lint => lint::run(Path::new(".")),
+        Command::Lint(scan) => lint::run(&scan),
     }
 }
