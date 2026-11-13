@@ -703,3 +703,16 @@ fn pin_discovers_nested_projects_and_skips_backups() {
         )
     );
 }
+
+#[test]
+fn empty_preview_succeeds() {
+    let root = project("empty-preview", &[("README.md", "no CI here\n")]);
+    let forge = Forge::new(&[]);
+
+    let output = pin(&root, &forge);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(stderr(&output), "");
+    assert_eq!(forge.total(), 0);
+}
