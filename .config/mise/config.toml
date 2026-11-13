@@ -1,7 +1,6 @@
 [deps.bun]
 auto = true
 
-
 [deps.capabilities]
 auto = true
 description = "Install Agent plugins"
@@ -23,7 +22,6 @@ sources = [
   "template/.config/capabilities/"
 ]
 
-
 [env]
 HK_MISE = 1
 
@@ -42,9 +40,7 @@ lockfile_auto_prune = true
 use_git_credentials = true
 
 [tasks]
-
 ai-setup = "capa install --yes"
-
 check = ["hk check --all", "cog check"]
 prepare-ci = ["bun ci"]
 
@@ -64,17 +60,10 @@ bun = "1.4.4"
 cocogitto = "7.0.0"
 cspell = "10.4.1"
 editorconfig-checker = "4.0.2"
-
-
 gh = "2.103.3"
-
 git-cliff = "2.14.2"
-
 "github:MRDGH2821/Sort-Markdown-Tables" = "0.6.0"
-
-
 "github:infragate/capa" = "2.4.0"
-
 hk = { version = "2.12.0", workflow = "release.yml" }
 ls-lint = "2.3.2"
 oxfmt = "0.78.0"

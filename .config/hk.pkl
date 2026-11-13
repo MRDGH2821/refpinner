@@ -2,7 +2,6 @@ amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.
 
 import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
 
-
 local sorters = new Group {
   steps {
     ["cspell-sort"] {
@@ -92,7 +91,6 @@ local misc_linters = new Group {
       exclude = List("template/**", ".config/hk.pkl", ".config/cspell.json")
     }
     ["ls_lint"] = Builtins.ls_lint
-
   }
 }
 
@@ -169,4 +167,3 @@ hooks {
     }
   }
 }
-
