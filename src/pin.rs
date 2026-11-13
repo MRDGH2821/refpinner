@@ -37,10 +37,27 @@ pub fn run(root: &Path) -> ExitCode {
                 continue;
             }
         };
+        // Editing a file with anchors or aliases could change other nodes that share them.
+        let aliased = references
+            .iter()
+            .any(|r| r.state == State::Warning && r.text.starts_with("unsupported YAML "));
         for reference in &references {
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
-            if reference.state != State::Unpinned {
-                continue;
+            match reference.state {
+                State::Pinned => continue,
+                State::Warning => {
+                    println!("{location}: warning {}", reference.text);
+                    continue;
+                }
+                State::Unpinned if aliased => {
+                    eprintln!(
+                        "refpinner: {location}: {}: not edited because the file uses YAML anchors or aliases",
+                        reference.text
+                    );
+                    status = ERROR;
+                    continue;
+                }
+                State::Unpinned => {}
             }
             match edits(&source, reference, &mut github) {
                 Ok(edits) => preview(&location, &source, reference, &edits),

@@ -389,3 +389,62 @@ fn reference_that_would_change_the_api_path_is_rejected_without_a_request() {
     );
     assert_eq!(forge.total(), 0);
 }
+
+#[test]
+fn reusable_workflows_and_composite_actions_are_previewed_and_warnings_are_not_resolved() {
+    let workflow = concat!(
+        "jobs:\n",
+        "  call:\n",
+        "    uses: actions/setup-node/.github/workflows/build.yml@v4\n",
+        "  a:\n",
+        "    steps:\n",
+        "      - uses: actions/setup-node@${{ matrix.ref }}\n",
+    );
+    let action = "runs:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v4\n";
+    let anchored = concat!(
+        "jobs:\n",
+        "  a:\n",
+        "    steps:\n",
+        "      - &step\n",
+        "        uses: actions/setup-node@v4\n",
+        "  b:\n",
+        "    steps:\n",
+        "      - *step\n",
+    );
+    let root = project(
+        "kinds",
+        &[
+            (".github/workflows/ci.yml", workflow),
+            (".github/workflows/anchored.yml", anchored),
+            ("action.yml", action),
+        ],
+    );
+    let forge = Forge::new(&setup_node());
+
+    let output = pin(&root, &forge);
+
+    assert_eq!(
+        stderr(&output),
+        "refpinner: .github/workflows/anchored.yml:5:15: actions/setup-node@v4: not edited because the file uses YAML anchors or aliases\n"
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let out = stdout(&output);
+    let headers: Vec<&str> = out
+        .lines()
+        .filter(|line| !line.starts_with(['-', '+']))
+        .collect();
+    assert_eq!(
+        headers,
+        [
+            ".github/workflows/anchored.yml:4:9: warning unsupported YAML anchor",
+            ".github/workflows/anchored.yml:8:9: warning unsupported YAML alias",
+            ".github/workflows/ci.yml:3:11: actions/setup-node/.github/workflows/build.yml@v4",
+            ".github/workflows/ci.yml:6:15: warning unsupported dynamic reference actions/setup-node@${{ matrix.ref }}",
+            "action.yml:4:13: actions/setup-node@v4",
+        ]
+    );
+    assert!(out.contains(
+        "+    uses: actions/setup-node/.github/workflows/build.yml@1111111111111111111111111111111111111111 # v4.2.1 (track: v4)\n"
+    ));
+    assert_eq!(forge.count("/repos/actions/setup-node/git/ref/tags/v4"), 1);
+}
