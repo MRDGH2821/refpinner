@@ -14,17 +14,52 @@ const OK: u8 = 0;
 /// Exit status when a file or reference could not be processed.
 const ERROR: u8 = 2;
 
+/// A previewed edit of one reference.
+pub struct Change {
+    /// What changes, shown after the reference in the preview; empty for a pin.
+    pub summary: String,
+    /// Edits of the file's original text.
+    pub edits: Vec<Edit>,
+    /// The reference's new value, which the write checks the edited file holds.
+    pub value: String,
+}
+
 /// Previews pins for the unpinned references in the files selected by `scan`.
 ///
 /// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
 /// user picks each pin; otherwise every pin that resolved is applied.
 pub fn run(scan: &Scan, write: bool) -> ExitCode {
+    let mut github = GitHub::from_env();
+    apply(scan, write, State::Unpinned, "pin", |source, reference| {
+        let edits = edits(source, reference, &mut github)?;
+        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
+        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
+        let value = format!("{action}@{}", edits[0].text);
+        Ok(Some(Change {
+            summary: String::new(),
+            edits,
+            value,
+        }))
+    })
+}
+
+/// Previews the change `plan` returns for each `target` reference in the files selected by
+/// `scan`; `None` means the reference needs no change.
+///
+/// With `write`, each file's changes are applied with a backup. When stdin is a terminal the
+/// user picks each `noun`; otherwise every change that resolved is applied.
+pub fn apply(
+    scan: &Scan,
+    write: bool,
+    target: State,
+    noun: &str,
+    mut plan: impl FnMut(&str, &Reference) -> Result<Option<Change>, String>,
+) -> ExitCode {
     let root = &scan.path;
     let files = match scan.files() {
         Ok(files) => files,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
-    let mut github = GitHub::from_env();
     let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
     for file in files {
@@ -52,12 +87,12 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
         for reference in &references {
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
             match reference.state {
-                State::Pinned => continue,
                 State::Warning => {
                     println!("{location}: warning {}", reference.text);
                     continue;
                 }
-                State::Unpinned if aliased => {
+                state if state != target => continue,
+                _ if aliased => {
                     eprintln!(
                         "refpinner: {location}: {}: not edited because the file uses YAML anchors or aliases",
                         reference.text
@@ -65,19 +100,21 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
                     status = ERROR;
                     continue;
                 }
-                State::Unpinned => {}
+                _ => {}
             }
-            match edits(&source, reference, &mut github) {
-                Ok(edits) => {
-                    preview(&location, &source, reference, &edits);
-                    if write && (!interactive || confirm()) {
-                        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
-                        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
-                        let pinned = format!("{action}@{}", edits[0].text);
-                        values.push((reference.line, reference.column, pinned));
-                        chosen.extend(edits);
+            match plan(&source, reference) {
+                Ok(Some(change)) => {
+                    let mut header = format!("{location}: {}", reference.text);
+                    if !change.summary.is_empty() {
+                        header = format!("{header}: {}", change.summary);
+                    }
+                    preview(&header, &source, reference, &change.edits);
+                    if write && (!interactive || confirm(noun)) {
+                        values.push((reference.line, reference.column, change.value));
+                        chosen.extend(change.edits);
                     }
                 }
+                Ok(None) => {}
                 Err(error) => {
                     eprintln!("refpinner: {location}: {}: {error}", reference.text);
                     status = ERROR;
@@ -101,9 +138,9 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
     ExitCode::from(status)
 }
 
-/// Asks whether to apply the pin just previewed; anything but `y` or `yes` declines.
-fn confirm() -> bool {
-    eprint!("apply this pin? [y/N] ");
+/// Asks whether to apply the `noun` just previewed; anything but `y` or `yes` declines.
+fn confirm(noun: &str) -> bool {
+    eprint!("apply this {noun}? [y/N] ");
     let _ = io::stderr().flush();
     let mut answer = String::new();
     io::stdin().lock().read_line(&mut answer).is_ok()
@@ -161,8 +198,8 @@ fn annotation(revision: &str, resolution: &Resolution) -> String {
     }
 }
 
-/// Prints the reference location and its line before and after the edits.
-fn preview(location: &str, source: &str, reference: &Reference, edits: &[Edit]) {
+/// Prints `header` and the reference's line before and after the edits.
+fn preview(header: &str, source: &str, reference: &Reference, edits: &[Edit]) {
     let start = source[..reference.span.start]
         .rfind('\n')
         .map_or(0, |newline| newline + 1);
@@ -176,13 +213,13 @@ fn preview(location: &str, source: &str, reference: &Reference, edits: &[Edit]) 
         })
         .collect();
     let line = &source[start..end];
-    println!("{location}: {}", reference.text);
+    println!("{header}");
     println!("-{line}");
     println!("+{}", edit::apply(line, &shifted));
 }
 
 /// Byte offset of the end of the line holding `offset`, before any `\r\n` or `\n`.
-fn line_end(source: &str, offset: usize) -> usize {
+pub fn line_end(source: &str, offset: usize) -> usize {
     let end = source[offset..]
         .find('\n')
         .map_or(source.len(), |newline| offset + newline);
