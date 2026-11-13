@@ -4,8 +4,9 @@ use std::process::ExitCode;
 
 use crate::discover::Scan;
 use crate::github;
+use crate::reference::State;
 
-/// Exit status when every reference is pinned.
+/// Exit status when every reference is pinned; warnings alone do not change it.
 const OK: u8 = 0;
 /// Exit status when at least one reference is unpinned.
 const UNPINNED: u8 = 1;
@@ -40,16 +41,16 @@ pub fn run(scan: &Scan) -> ExitCode {
             }
         };
         for reference in references {
-            let state = if reference.pinned {
-                "pinned"
-            } else {
-                "unpinned"
+            let state = match reference.state {
+                State::Pinned => "pinned",
+                State::Unpinned => "unpinned",
+                State::Warning => "warning",
             };
             println!(
                 "{shown}:{}:{}: {state} {}",
                 reference.line, reference.column, reference.text
             );
-            if !reference.pinned {
+            if reference.state == State::Unpinned {
                 status = status.max(UNPINNED);
             }
         }
@@ -57,7 +58,7 @@ pub fn run(scan: &Scan) -> ExitCode {
     ExitCode::from(status)
 }
 
-fn fail(message: &str) -> ExitCode {
+pub fn fail(message: &str) -> ExitCode {
     eprintln!("refpinner: {message}");
     ExitCode::from(ERROR)
 }
