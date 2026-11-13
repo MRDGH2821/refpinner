@@ -199,7 +199,7 @@ documentation when setup or behavior changes.
 
 ### Issue tracker
 
-Issues and specs are local Markdown files. See `docs/agents/issue-tracker.md`.
+Issues and specs are GitHub issues. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
