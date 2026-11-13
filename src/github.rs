@@ -2,9 +2,10 @@ use saphyr::{LoadableYamlNode, MarkedYaml, ScanError};
 
 use crate::reference::Reference;
 
-/// Extracts the action references used by steps in a GitHub workflow.
+/// Extracts the action references used by steps and reusable-workflow jobs in a GitHub
+/// workflow.
 ///
-/// Local actions (`./...`) need no pin and are skipped.
+/// Local actions and workflows (`./...`, `$/...`) need no pin and are skipped.
 /// shortcut: `docker://` images and `${{ }}` expressions are skipped silently; the image
 /// and unsupported-reference tickets report them.
 pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
@@ -18,21 +19,22 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
             continue;
         };
         for job in jobs.values() {
-            let Some(steps) = job
+            let steps = job
                 .data
                 .as_mapping_get("steps")
                 .and_then(|s| s.data.as_sequence())
-            else {
-                continue;
-            };
-            for uses in steps
-                .iter()
-                .filter_map(|step| step.data.as_mapping_get("uses"))
-            {
+                .into_iter()
+                .flatten()
+                .filter_map(|step| step.data.as_mapping_get("uses"));
+            for uses in job.data.as_mapping_get("uses").into_iter().chain(steps) {
                 let Some(text) = uses.data.as_str() else {
                     continue;
                 };
-                if text.starts_with("./") || text.starts_with("docker://") || text.contains("${{") {
+                if text.starts_with("./")
+                    || text.starts_with("$/")
+                    || text.starts_with("docker://")
+                    || text.contains("${{")
+                {
                     continue;
                 }
                 references.push(Reference {

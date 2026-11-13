@@ -109,3 +109,35 @@ fn short_sha_and_branch_are_unpinned() {
         )
     );
 }
+
+#[test]
+fn reusable_workflow_references_are_reported() {
+    let root = project(
+        "reusable",
+        &[(
+            "call.yml",
+            concat!(
+                "jobs:\n",
+                "  pinned:\n",
+                "    uses: owner/repo/.github/workflows/build.yml@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+                "  floating:\n",
+                "    uses: owner/repo/.github/workflows/build.yml@v1\n",
+                "  local:\n",
+                "    uses: ./.github/workflows/build.yml\n",
+                "  self:\n",
+                "    uses: $/.github/workflows/build.yml\n",
+            ),
+        )],
+    );
+
+    let output = lint(&root);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".github/workflows/call.yml:3:11: pinned owner/repo/.github/workflows/build.yml@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+            ".github/workflows/call.yml:5:11: unpinned owner/repo/.github/workflows/build.yml@v1\n",
+        )
+    );
+}
