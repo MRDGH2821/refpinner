@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
-use crate::reference::Reference;
+use crate::reference::{Reference, State};
 use crate::resolve::{GitHub, Resolution};
 use crate::{discover, github};
 
@@ -37,8 +37,11 @@ pub fn run(root: &Path) -> ExitCode {
                 continue;
             }
         };
-        for reference in references.iter().filter(|reference| !reference.pinned) {
+        for reference in &references {
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
+            if reference.state != State::Unpinned {
+                continue;
+            }
             match edits(&source, reference, &mut github) {
                 Ok(edits) => preview(&location, &source, reference, &edits),
                 Err(error) => {

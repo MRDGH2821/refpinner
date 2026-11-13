@@ -1,0 +1,6 @@
+---
+name: Not in a recognized location
+runs:
+  steps:
+    - uses: owner/ignored@v1
+  using: composite
