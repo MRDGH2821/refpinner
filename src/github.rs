@@ -3,7 +3,7 @@ use saphyr::{LoadableYamlNode, MarkedYaml, ScanError};
 use crate::reference::Reference;
 
 /// Extracts the action references used by steps and reusable-workflow jobs in a GitHub
-/// workflow.
+/// workflow, or by `runs.steps` in a composite action.
 ///
 /// Local actions and workflows (`./...`, `$/...`) need no pin and are skipped.
 /// shortcut: `docker://` images and `${{ }}` expressions are skipped silently; the image
@@ -11,14 +11,14 @@ use crate::reference::Reference;
 pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
     let mut references = Vec::new();
     for document in MarkedYaml::load_from_str(source)? {
-        let Some(jobs) = document
+        let jobs = document
             .data
             .as_mapping_get("jobs")
             .and_then(|j| j.data.as_mapping())
-        else {
-            continue;
-        };
-        for job in jobs.values() {
+            .into_iter()
+            .flat_map(|jobs| jobs.values());
+        // A composite action's `runs` holds `steps` the same way a job does.
+        for job in jobs.chain(document.data.as_mapping_get("runs")) {
             let steps = job
                 .data
                 .as_mapping_get("steps")

@@ -111,6 +111,21 @@ fn short_sha_and_branch_are_unpinned() {
 }
 
 #[test]
+fn composite_actions_in_recognized_locations_are_reported() {
+    let output = lint(&fixture("composite"));
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".github/actions/setup/action.yaml:5:13: unpinned actions/setup-node@v4\n",
+            ".github/actions/setup/nested/action.yml:5:13: unpinned owner/repo/path@main\n",
+            "action.yml:5:13: pinned actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+        )
+    );
+}
+
+#[test]
 fn reusable_workflow_references_are_reported() {
     let root = project(
         "reusable",
