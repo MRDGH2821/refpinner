@@ -156,3 +156,92 @@ fn reusable_workflow_references_are_reported() {
         )
     );
 }
+
+#[test]
+fn dynamic_references_anchors_and_aliases_warn_without_failing() {
+    let root = project(
+        "unsupported",
+        &[(
+            "ci.yml",
+            concat!(
+                "jobs:\n",
+                "  a:\n",
+                "    steps: &steps\n",
+                "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+                "  b:\n",
+                "    steps: *steps\n",
+                "  c:\n",
+                "    uses: ${{ matrix.workflow }}\n",
+            ),
+        )],
+    );
+
+    let output = lint(&root);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".github/workflows/ci.yml:3:12: warning unsupported YAML anchor\n",
+            ".github/workflows/ci.yml:4:15: pinned actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+            ".github/workflows/ci.yml:6:12: warning unsupported YAML alias\n",
+            ".github/workflows/ci.yml:8:11: warning unsupported dynamic reference ${{ matrix.workflow }}\n",
+        )
+    );
+}
+
+#[test]
+fn aliased_reference_is_not_resolved() {
+    let root = project(
+        "aliased",
+        &[(
+            "ci.yml",
+            concat!(
+                "x: &action actions/checkout@v4\n",
+                "jobs:\n",
+                "  a:\n",
+                "    steps:\n",
+                "      - uses: *action\n",
+            ),
+        )],
+    );
+
+    let output = lint(&root);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".github/workflows/ci.yml:1:4: warning unsupported YAML anchor\n",
+            ".github/workflows/ci.yml:5:15: warning unsupported YAML alias\n",
+        )
+    );
+}
+
+#[test]
+fn warnings_do_not_hide_unpinned_failures() {
+    let root = project(
+        "warn-and-fail",
+        &[(
+            "ci.yml",
+            concat!(
+                "jobs:\n",
+                "  a:\n",
+                "    steps:\n",
+                "      - uses: ${{ matrix.action }}\n",
+                "      - uses: actions/checkout@v4\n",
+            ),
+        )],
+    );
+
+    let output = lint(&root);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".github/workflows/ci.yml:4:15: warning unsupported dynamic reference ${{ matrix.action }}\n",
+            ".github/workflows/ci.yml:5:15: unpinned actions/checkout@v4\n",
+        )
+    );
+}

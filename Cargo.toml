@@ -8,3 +8,4 @@ license-file = "LICENSE"
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 saphyr = "0.3.4"
+saphyr-parser = "0.3.4"
