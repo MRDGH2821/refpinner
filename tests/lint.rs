@@ -332,7 +332,7 @@ fn tracked_ignored_workflows_are_discovered_but_untracked_ones_are_not() {
             (".gitignore", ".github/workflows/*.yml\n"),
         ],
     );
-    let mut git = |args: &[&str]| {
+    let git = |args: &[&str]| {
         let mut command = Command::new("git");
         command.args(args).current_dir(&root);
         for key in [

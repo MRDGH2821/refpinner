@@ -30,6 +30,8 @@ impl Registry {
     pub fn from_env() -> Self {
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            // Never follow redirects with Authorization; blob CDNs are out of scope here.
+            .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(30)))
             .build()
             .into();
@@ -142,7 +144,7 @@ impl Registry {
         let mut response = self.manifest(&url, true, None)?;
         if response.status().as_u16() == 401 {
             let challenge = header(&response, "www-authenticate").unwrap_or_default();
-            token = Some(self.token(&challenge)?);
+            token = Some(self.token(&challenge, &name.host)?);
             response = self.manifest(&url, true, token.as_deref())?;
         }
         let repository = &name.repository;
@@ -199,16 +201,16 @@ impl Registry {
             .map_err(|error| format!("cannot reach registry: {error}"))
     }
 
-    /// Gets an anonymous token from the realm named by a `Bearer` challenge.
+    /// Gets a Bearer token from the realm named by a challenge.
     ///
-    /// shortcut: no credentials are sent, so only public images resolve; the auth ticket
-    /// (#14) adds them, scoped to the registry host that issued the challenge.
-    fn token(&self, challenge: &str) -> Result<String, String> {
+    /// Credentials are looked up by the **registry** host (`registry_host`), never by the
+    /// realm host, and are sent only on this direct token request (redirects are disabled).
+    fn token(&self, challenge: &str, registry_host: &str) -> Result<String, String> {
         let params = challenge
             .split_once(' ')
             .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
             .map(|(_, params)| parameters(params))
-            .ok_or("registry requires authentication, which is not supported yet")?;
+            .ok_or("registry requires authentication")?;
         let get = |key: &str| {
             params
                 .iter()
@@ -225,11 +227,24 @@ impl Registry {
                 url.push_str(&format!("{key}={}", encode(value)));
             }
         }
-        let mut response = self
-            .agent
-            .get(&url)
+        let cred = (!registry_host.is_empty())
+            .then(|| crate::credentials::find(registry_host, crate::credentials::Service::Registry))
+            .flatten();
+        let mut request = self.agent.get(&url);
+        if let Some(cred) = &cred {
+            request = request.header("Authorization", basic_auth(cred.token.expose()));
+        }
+        let mut response = request
             .call()
             .map_err(|error| format!("cannot reach registry token service: {error}"))?;
+        if response.status().as_u16() == 401 && cred.is_some() {
+            crate::credentials::warn_rejected(registry_host, crate::credentials::Service::Registry);
+            response = self
+                .agent
+                .get(&url)
+                .call()
+                .map_err(|error| format!("cannot reach registry token service: {error}"))?;
+        }
         if response.status().as_u16() != 200 {
             return Err(format!(
                 "registry token service returned HTTP {}",
@@ -248,6 +263,40 @@ impl Registry {
             .map(str::to_owned)
             .ok_or_else(|| String::from("registry token response has no token"))
     }
+}
+
+/// Basic auth for a registry token request. `user:pass` or a bare token (empty user).
+fn basic_auth(secret: &str) -> String {
+    let raw = if secret.contains(':') {
+        secret.to_owned()
+    } else {
+        format!(":{secret}")
+    };
+    format!("Basic {}", base64_encode(raw.as_bytes()))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {

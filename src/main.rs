@@ -1,4 +1,5 @@
 mod config;
+mod credentials;
 mod discover;
 mod edit;
 mod github;
@@ -34,6 +35,11 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// List, store or remove host-scoped credentials without revealing tokens
+    Credentials {
+        #[command(subcommand)]
+        command: credentials::CredentialsCommand,
     },
     /// Report pinned and unpinned references without network access
     Lint(discover::Scan),
@@ -92,6 +98,7 @@ fn main() -> ExitCode {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => lint::fail(&error.to_string()),
         },
+        Command::Credentials { command } => credentials::run(command),
         Command::Lint(scan) => lint::run(&scan),
         Command::Pin { write, scan } => pin::run(&scan, write, &cli.actions),
         Command::Update { offline: true, .. } => {
