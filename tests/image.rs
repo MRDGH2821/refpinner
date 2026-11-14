@@ -491,3 +491,191 @@ fn registry_auth_scheme_is_case_insensitive_and_accepts_access_token() {
         original
     );
 }
+
+#[test]
+fn mixed_pins_preserve_flow_yaml_and_bytes_take_next_backup_and_skip_image_updates() {
+    let original = concat!(
+        "# café\r\n",
+        "jobs:\r\n",
+        "  build:\r\n",
+        "    container: {image: \"node:18\"}\r\n",
+        "    services: {db: {image: 'node:18'}} # keep\r\n",
+        "    steps:\r\n",
+        "      - uses: owner/tool@main # tool\r\n",
+    );
+    let file = ".github/workflows/ci.yml";
+    let root = project("mixed-bytes", &[(file, original)]);
+    let path = root.join(file);
+    std::fs::write(root.join(format!("{file}.bkp")), "existing backup").expect("occupy backup");
+    let mut routes = images();
+    routes.push((
+        "GET /repos/owner/tool/git/ref/tags/main",
+        200,
+        Vec::new(),
+        r#"{"object":{"type":"commit","sha":"1111111111111111111111111111111111111111"}}"#,
+    ));
+    let registry = Registry::new(routes);
+
+    let output = refpinner(&root, &registry, &["pin", "--write"]);
+
+    assert_eq!(stderr(&output), "");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout(&output).contains(&format!("wrote {file} (backup {file}.bkp2)\n")));
+    let expected = original
+        .replace("node:18", &format!("node:18@{NODE}"))
+        .replace(
+            "owner/tool@main",
+            "owner/tool@1111111111111111111111111111111111111111 # main",
+        );
+    assert_eq!(
+        std::fs::read(&path).expect("read workflow"),
+        expected.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(root.join(format!("{file}.bkp2"))).expect("read exact backup"),
+        original.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(format!("{file}.bkp"))).expect("read old backup"),
+        "existing backup"
+    );
+    assert_eq!(
+        registry
+            .keys()
+            .iter()
+            .filter(|key| key.contains("/manifests/"))
+            .count(),
+        1
+    );
+    let before = registry.keys().len();
+
+    let repeat = refpinner(&root, &registry, &["pin", "--write"]);
+
+    assert_eq!(repeat.status.code(), Some(0));
+    assert_eq!(stderr(&repeat), "");
+    assert_eq!(stdout(&repeat), "");
+    assert_eq!(registry.keys().len(), before);
+
+    let update = refpinner(&root, &registry, &["update", "--write"]);
+
+    assert_eq!(update.status.code(), Some(0));
+    assert_eq!(stderr(&update), "");
+    assert_eq!(stdout(&update), "");
+    assert_eq!(
+        registry.keys().len(),
+        before + 1,
+        "only the action should be checked"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read unchanged file"),
+        expected.as_bytes()
+    );
+    assert!(!root.join(format!("{file}.bkp3")).exists());
+}
+
+#[test]
+fn unsafe_image_yaml_is_not_resolved_or_written_and_safe_files_continue() {
+    let aliased = "image: &base node:18\nservices: [*base]\n";
+    let escaped = "jobs:\n  build:\n    container: \"node\\x3a18\"\n";
+    let root = project(
+        "unsafe-yaml",
+        &[
+            (".gitlab-ci.yml", aliased),
+            (".github/workflows/ci.yml", escaped),
+            (
+                ".gitea/workflows/ci.yaml",
+                "jobs:\n  build:\n    container: alpine\n",
+            ),
+        ],
+    );
+    let registry = Registry::new(images());
+
+    let output = refpinner(&root, &registry, &["pin", "--write"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("cannot edit a reference with escapes or line breaks"));
+    assert!(stderr(&output).contains("not edited because the file uses YAML anchors or aliases"));
+    assert!(stdout(&output).contains("warning unsupported YAML alias"));
+    for (file, original) in [
+        (".gitlab-ci.yml", aliased),
+        (".github/workflows/ci.yml", escaped),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(root.join(file)).expect("read unsafe file"),
+            original
+        );
+        assert!(!root.join(format!("{file}.bkp")).exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitea/workflows/ci.yaml")).expect("read safe file"),
+        format!("jobs:\n  build:\n    container: alpine:latest@{ALPINE}\n")
+    );
+    assert_eq!(
+        registry.keys(),
+        ["HEAD /v2/library/alpine/manifests/latest"]
+    );
+}
+
+#[test]
+fn registry_failures_leave_originals_without_backups_and_keep_safe_changes() {
+    let original = concat!(
+        "image: missing:1\n",
+        "services:\n",
+        "  - limited:1\n",
+        "  - private:1\n",
+        "  - unreadable:1\n",
+    );
+    let root = project(
+        "registry-failures",
+        &[
+            (".gitlab-ci.yml", original),
+            (
+                ".github/workflows/ci.yml",
+                "jobs:\n  a:\n    container: alpine\n",
+            ),
+        ],
+    );
+    let mut routes = images();
+    routes.extend([
+        ("HEAD /v2/library/limited/manifests/1", 429, Vec::new(), ""),
+        (
+            "HEAD /v2/library/private/manifests/1",
+            401,
+            vec![("WWW-Authenticate", r#"Bearer realm="{url}/bad-token""#)],
+            "",
+        ),
+        ("GET /bad-token", 200, Vec::new(), "not JSON"),
+        (
+            "HEAD /v2/library/unreadable/manifests/1",
+            200,
+            Vec::new(),
+            "",
+        ),
+        (
+            "GET /v2/library/unreadable/manifests/1",
+            503,
+            Vec::new(),
+            "",
+        ),
+    ]);
+    let registry = Registry::new(routes);
+
+    let output = refpinner(&root, &registry, &["pin", "--write"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let errors = stderr(&output);
+    for message in [
+        "no tag 1 in registry-1.docker.io image library/missing",
+        "returned HTTP 429 for library/limited:1",
+        "invalid registry token response:",
+        "returned HTTP 503 for library/unreadable:1",
+    ] {
+        assert!(errors.contains(message), "{errors}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).expect("read failed file"),
+        original
+    );
+    assert!(!root.join(".gitlab-ci.yml.bkp").exists());
+    assert!(stdout(&output).contains("wrote .github/workflows/ci.yml"));
+}
