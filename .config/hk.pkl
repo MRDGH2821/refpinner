@@ -42,7 +42,8 @@ local sorters = new Group {
     }
     ["toml-sort"] {
       check = "toml-sort --check --sort-table-keys --sort-inline-tables {{files}}"
-      exclude = List("**/tombi.toml")
+      // Cargo.toml follows Cargo's conventional key order, enforced by tombi's schema.
+      exclude = List("**/Cargo.toml", "**/tombi.toml")
       fix = "toml-sort --in-place --sort-table-keys --sort-inline-tables {{files}}"
       types = List("toml")
     }
@@ -118,6 +119,20 @@ local style_linters = new Group {
   }
 }
 
+local rust_linters = new Group {
+  steps {
+    // Chained so steps that rewrite sources or share the Cargo target dir never overlap.
+    ["cargo_fmt"] = Builtins.cargo_fmt
+    ["cargo_check"] = (Builtins.cargo_check) { depends = "cargo_fmt" }
+    ["cargo_clippy"] = (Builtins.cargo_clippy) { depends = "cargo_check" }
+    ["cargo_test"] {
+      depends = "cargo_clippy"
+      glob = List("**/*.rs", "**/Cargo.toml", "tests/fixtures/**")
+      check = "cargo test --quiet"
+    }
+  }
+}
+
 local spell_linters = new Group {
   steps {
     ["cspell"] {
@@ -150,6 +165,7 @@ steps = new Mapping<String, Step | Group> {
   ["text"] = text_linters
   ["misc"] = misc_linters
   ["secrets"] = secret_linters
+  ["rust"] = rust_linters
   ["spell"] = spell_linters
   ["oxfmt"] = (Builtins.oxfmt) { depends = "keep-sorted"; exclusive = true }
 }

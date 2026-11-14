@@ -1,0 +1,7 @@
+---
+description: Nested composite action fixture
+name: Nested
+runs:
+  steps:
+    - uses: owner/repo/path@main
+  using: composite
