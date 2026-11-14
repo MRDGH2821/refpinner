@@ -54,6 +54,84 @@ impl Registry {
         resolved
     }
 
+    /// Lists every tag of `name`'s repository, following pagination.
+    pub fn tags(&mut self, name: &Name) -> Result<Vec<String>, String> {
+        let key = format!("{}/{}:tags", name.host, name.repository);
+        if let Some(cached) = self.cache.get(&key) {
+            return cached.clone().map(|body| {
+                serde_json::from_str::<TagList>(&body)
+                    .map(|list| list.tags)
+                    .unwrap_or_default()
+            });
+        }
+        let mut tags = Vec::new();
+        let mut url = {
+            let base = self
+                .base
+                .clone()
+                .unwrap_or_else(|| format!("https://{}", name.host));
+            format!("{base}/v2/{}/tags/list?n=1000", name.repository)
+        };
+        let mut token = None;
+        loop {
+            let mut response = self.get(&url, token.as_deref())?;
+            if response.status().as_u16() == 401 && token.is_none() {
+                let challenge = header(&response, "www-authenticate").unwrap_or_default();
+                token = Some(self.token(&challenge)?);
+                response = self.get(&url, token.as_deref())?;
+            }
+            match response.status().as_u16() {
+                200 => {}
+                status => {
+                    return Err(format!(
+                        "registry {} returned HTTP {status} listing tags of {}",
+                        name.host, name.repository
+                    ));
+                }
+            }
+            let link = header(&response, "link");
+            let body = response
+                .body_mut()
+                .read_to_string()
+                .map_err(|error| format!("cannot read tag list of {}: {error}", name.repository))?;
+            let page: TagList = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid tag list for {}: {error}", name.repository))?;
+            tags.extend(page.tags);
+            let Some(next) = link.as_deref().and_then(next_link) else {
+                break;
+            };
+            url = if next.starts_with("http://") || next.starts_with("https://") {
+                next.to_owned()
+            } else {
+                let base = self
+                    .base
+                    .clone()
+                    .unwrap_or_else(|| format!("https://{}", name.host));
+                format!("{base}{next}")
+            };
+        }
+        self.cache.insert(
+            key,
+            Ok(serde_json::to_string(&TagList { tags: tags.clone() }).unwrap()),
+        );
+        Ok(tags)
+    }
+
+    fn get(
+        &self,
+        url: &str,
+        token: Option<&str>,
+    ) -> Result<ureq::http::Response<ureq::Body>, String> {
+        let request = self.agent.get(url);
+        let request = match token {
+            Some(token) => request.header("Authorization", format!("Bearer {token}")),
+            None => request,
+        };
+        request
+            .call()
+            .map_err(|error| format!("cannot reach registry: {error}"))
+    }
+
     fn lookup(&self, name: &Name, tag: &str) -> Result<String, String> {
         let base = self
             .base
@@ -194,6 +272,24 @@ fn parameters(text: &str) -> Vec<(String, String)> {
         rest = tail.trim_start_matches(',').trim();
     }
     pairs
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct TagList {
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// Reads the `rel="next"` target from an RFC 5988 `Link` header.
+fn next_link(header: &str) -> Option<&str> {
+    header.split(',').find_map(|part| {
+        let (url, params) = part.trim().split_once('>')?;
+        let url = url.trim().strip_prefix('<')?;
+        params
+            .split(';')
+            .any(|param| param.trim() == "rel=\"next\"")
+            .then_some(url)
+    })
 }
 
 /// Percent-encodes a query value; `:` and `/` are valid in a query (RFC 3986) and stay readable.

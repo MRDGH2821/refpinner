@@ -1,10 +1,13 @@
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
+use crate::config::Settings;
 use crate::discover::Scan;
 use crate::edit::Edit;
+use crate::image;
 use crate::pin::{self, Change, line_end};
 use crate::reference::{Kind, Reference, State};
+use crate::registry::Registry;
 use crate::resolve::{Remote, Resolver};
 use crate::settings::Actions;
 use crate::version::{self, Limit, Releases};
@@ -15,7 +18,8 @@ use crate::version::{self, Limit, Releases};
 /// `limit` allows, and a branch or floating tag moves to the commit it names now. An
 /// unannotated pin follows the default branch only with `follow_default_branch`, or after
 /// the user confirms the previewed update in an interactive write. With `write`, updates are
-/// applied as `pin --write` applies pins.
+/// applied as `pin --write` applies pins. Pinned images follow the same limits using their
+/// inline tags.
 pub fn run(
     scan: &Scan,
     write: bool,
@@ -25,31 +29,182 @@ pub fn run(
     settings: &Actions,
 ) -> ExitCode {
     let mut resolver = Resolver::default();
+    let mut registry = Registry::from_env();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
+    let interactive = write && io::stdin().is_terminal();
     pin::apply(
         scan,
         write,
         State::Pinned,
         "update",
         |input, source, reference| {
-            // shortcut: image updates are handled by ticket #12.
+            let bound = limit
+                .or_else(|| input.settings.limit(reference))
+                .unwrap_or(Limit::Minor);
+            if reference.kind == Kind::Image {
+                return image_plan(
+                    source,
+                    reference,
+                    &mut registry,
+                    &input.settings,
+                    bound,
+                    releases,
+                    interactive,
+                );
+            }
             if reference.kind != Kind::Action {
                 return Ok(None);
             }
             let (remote, action) = resolver.action(input, reference, settings)?;
-            plan(
-                source,
-                reference,
-                remote,
-                &action,
-                limit
-                    .or_else(|| input.settings.limit(reference))
-                    .unwrap_or(Limit::Minor),
-                releases,
-                follow,
-            )
+            plan(source, reference, remote, &action, bound, releases, follow)
         },
     )
+}
+
+/// Computes the update of one pinned image, or `None` when it is up to date.
+fn image_plan(
+    source: &str,
+    reference: &Reference,
+    registry: &mut Registry,
+    settings: &Settings,
+    limit: Limit,
+    releases: Releases,
+    interactive: bool,
+) -> Result<Option<Change>, String> {
+    let raw = &source[reference.span.clone()];
+    let quoted = raw.starts_with(['"', '\'']);
+    if raw.get(usize::from(quoted)..raw.len() - usize::from(quoted)) != Some(&reference.text) {
+        return Err(String::from(
+            "cannot edit a reference with escapes or line breaks",
+        ));
+    }
+    let (left, digest) = reference
+        .text
+        .rsplit_once('@')
+        .filter(|(_, digest)| image::is_digest(digest))
+        .ok_or("pinned image has no digest")?;
+    let name = image::parse(left)?;
+    let tag = name.tag.clone().unwrap_or_else(|| String::from("latest"));
+    let current = registry.resolve(&name)?;
+    let comparable = image::tag_parts(&tag, settings, left).is_some();
+    if current != digest {
+        if comparable {
+            return Err(format!(
+                "tag {tag} moved to {current}; review it before updating"
+            ));
+        }
+        // Floating or opaque tags: a new digest is the update; keep the tag.
+        let digest_start = reference.span.end - usize::from(quoted) - digest.len();
+        return Ok(Some(Change {
+            summary: format!("{tag} moved"),
+            value: format!("{left}@{current}"),
+            edits: vec![Edit {
+                start: digest_start,
+                end: digest_start + digest.len(),
+                text: current,
+            }],
+        }));
+    }
+    if !comparable {
+        return Ok(None);
+    }
+    let tags = registry.tags(&name)?;
+    let Some(chosen) = select_image_tag(&tag, &tags, settings, left, limit, releases, interactive)?
+    else {
+        return Ok(None);
+    };
+    if chosen == tag {
+        return Ok(None);
+    }
+    let tip = registry.resolve(&image::Name {
+        host: name.host,
+        repository: name.repository,
+        tag: Some(chosen.clone()),
+    })?;
+    let tag_start = reference.span.start + usize::from(quoted) + left.len() - tag.len();
+    let digest_start = reference.span.end - usize::from(quoted) - digest.len();
+    let prefix_len = left.len() - tag.len();
+    Ok(Some(Change {
+        summary: format!("{tag} -> {chosen}"),
+        value: format!("{}{chosen}@{tip}", &left[..prefix_len]),
+        edits: vec![
+            Edit {
+                start: tag_start,
+                end: tag_start + tag.len(),
+                text: chosen,
+            },
+            Edit {
+                start: digest_start,
+                end: digest_start + digest.len(),
+                text: tip,
+            },
+        ],
+    }))
+}
+
+/// Picks the highest eligible existing tag, or reports ambiguity for unattended runs.
+fn select_image_tag(
+    current: &str,
+    tags: &[String],
+    settings: &Settings,
+    reference: &str,
+    limit: Limit,
+    releases: Releases,
+    interactive: bool,
+) -> Result<Option<String>, String> {
+    let Some(current_parts) = image::tag_parts(current, settings, reference) else {
+        // Non-comparable tags stay pinned; digest movement is handled above.
+        return Ok(None);
+    };
+    if limit == Limit::Patch && current_parts.version.core.len() < 3 {
+        return Err(format!(
+            "cannot apply patch limit to image tag {current} without an exact version"
+        ));
+    }
+    let mut best_same: Option<(image::TagParts, String)> = None;
+    let mut best_cross: Option<(image::TagParts, String)> = None;
+    for tag in tags {
+        let Some(parts) = image::tag_parts(tag, settings, reference) else {
+            continue;
+        };
+        if !parts.compatible(&current_parts) {
+            continue;
+        }
+        let primary = releases.allows(&current_parts.version, &parts.version)
+            && limit.allows(&current_parts.version, &parts.version);
+        let same_components = parts.components == current_parts.components;
+        if same_components {
+            if !primary {
+                continue;
+            }
+            match &best_same {
+                Some((chosen, _)) if parts.cmp_version(chosen) != std::cmp::Ordering::Greater => {}
+                _ => best_same = Some((parts, tag.clone())),
+            }
+            continue;
+        }
+        // Independent component upgrades: primary may stay put while a variant moves.
+        let primary_ok = parts.version == current_parts.version || primary;
+        if !primary_ok || !parts.components_allowed(&current_parts, limit, releases) {
+            continue;
+        }
+        match &best_cross {
+            Some((chosen, _)) if parts.cmp_version(chosen) != std::cmp::Ordering::Greater => {}
+            _ => best_cross = Some((parts, tag.clone())),
+        }
+    }
+    if let Some((_, tag)) = best_same {
+        return Ok(Some(tag));
+    }
+    if let Some((_, tag)) = best_cross {
+        if interactive {
+            return Ok(Some(tag));
+        }
+        return Err(format!(
+            "ambiguous compound update from {current}; select a tag interactively or with a version rule"
+        ));
+    }
+    Ok(None)
 }
 
 /// Computes the update of one pinned reference, or `None` when it is up to date.

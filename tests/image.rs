@@ -532,7 +532,7 @@ fn registry_auth_scheme_is_case_insensitive_and_accepts_access_token() {
 }
 
 #[test]
-fn mixed_pins_preserve_flow_yaml_and_bytes_take_next_backup_and_skip_image_updates() {
+fn mixed_pins_preserve_flow_yaml_and_bytes_take_next_backup_and_leave_images_without_newer_tags() {
     let original = concat!(
         "# café\r\n",
         "jobs:\r\n",
@@ -595,21 +595,32 @@ fn mixed_pins_preserve_flow_yaml_and_bytes_take_next_backup_and_skip_image_updat
     assert_eq!(stdout(&repeat), "");
     assert_eq!(registry.keys().len(), before);
 
-    let update = refpinner(&root, &registry, &["update", "--write"]);
+    // Image updates need a tag list; without one the image stays put and the action is checked.
+    let mut update_routes = images();
+    update_routes.push((
+        "GET /repos/owner/tool/git/ref/tags/main",
+        200,
+        Vec::new(),
+        r#"{"object":{"type":"commit","sha":"1111111111111111111111111111111111111111"}}"#,
+    ));
+    update_routes.push((
+        "GET /v2/library/node/tags/list?n=1000",
+        200,
+        Vec::new(),
+        r#"{"name":"library/node","tags":["18"]}"#,
+    ));
+    let update_registry = Registry::new(update_routes);
+    let update = refpinner(&root, &update_registry, &["update", "--write"]);
 
-    assert_eq!(update.status.code(), Some(0));
+    assert_eq!(update.status.code(), Some(0), "{}", stderr(&update));
     assert_eq!(stderr(&update), "");
     assert_eq!(stdout(&update), "");
-    assert_eq!(
-        registry.keys().len(),
-        before + 1,
-        "only the action should be checked"
-    );
     assert_eq!(
         std::fs::read(&path).expect("read unchanged file"),
         expected.as_bytes()
     );
     assert!(!root.join(format!("{file}.bkp3")).exists());
+    let _ = before;
 }
 
 #[test]
@@ -717,4 +728,327 @@ fn registry_failures_leave_originals_without_backups_and_keep_safe_changes() {
     );
     assert!(!root.join(".gitlab-ci.yml.bkp").exists());
     assert!(stdout(&output).contains("wrote .github/workflows/ci.yml"));
+}
+
+const V421: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const V423: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const V410: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const V510: &str = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const MOVED: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+/// Routes for `library/node` tags used by image update tests.
+fn node_versions() -> Vec<Route> {
+    let tags = r#"{"name":"library/node","tags":["4.2.1","4.2.3","4.10.0","5.1.0","4.2.1-alpine","4.2.3-alpine","4.10.0-alpine","4.2.3-alpine3.19","4.2.3-alpine3.20","4.10.0-alpine3.20"]}"#;
+    vec![
+        (
+            "GET /v2/library/node/tags/list?n=1000",
+            200,
+            Vec::new(),
+            tags,
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.1",
+            200,
+            vec![("Docker-Content-Digest", V421)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.3",
+            200,
+            vec![("Docker-Content-Digest", V423)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.10.0",
+            200,
+            vec![("Docker-Content-Digest", V410)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/5.1.0",
+            200,
+            vec![("Docker-Content-Digest", V510)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.1-alpine",
+            200,
+            vec![("Docker-Content-Digest", V421)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.3-alpine",
+            200,
+            vec![("Docker-Content-Digest", V423)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.10.0-alpine",
+            200,
+            vec![("Docker-Content-Digest", V410)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.3-alpine3.19",
+            200,
+            vec![("Docker-Content-Digest", V423)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.3-alpine3.20",
+            200,
+            vec![("Docker-Content-Digest", V410)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.10.0-alpine3.20",
+            200,
+            vec![("Docker-Content-Digest", V510)],
+            "",
+        ),
+    ]
+}
+
+#[test]
+fn update_applies_limits_and_reports_moved_exact_image_tags() {
+    let root = project(
+        "image-update-limits",
+        &[(
+            ".gitlab-ci.yml",
+            &format!("image: node:4.2.1@{V421}\nservices:\n  - name: node:4.2.1@{V421}\n"),
+        )],
+    );
+    let registry = Registry::new(node_versions());
+
+    let patch = refpinner(&root, &registry, &["update", "--patch"]);
+    assert_eq!(patch.status.code(), Some(0), "{}", stderr(&patch));
+    assert!(
+        stdout(&patch).contains("4.2.1 -> 4.2.3\n"),
+        "{}",
+        stdout(&patch)
+    );
+
+    let minor = refpinner(&root, &registry, &["update"]);
+    assert_eq!(minor.status.code(), Some(0), "{}", stderr(&minor));
+    assert!(
+        stdout(&minor).contains("4.2.1 -> 4.10.0\n"),
+        "{}",
+        stdout(&minor)
+    );
+
+    let major = refpinner(&root, &registry, &["update", "--major"]);
+    assert_eq!(major.status.code(), Some(0), "{}", stderr(&major));
+    assert!(
+        stdout(&major).contains("4.2.1 -> 5.1.0\n"),
+        "{}",
+        stdout(&major)
+    );
+
+    let moved = project(
+        "image-moved",
+        &[(".gitlab-ci.yml", &format!("image: node:4.2.1@{MOVED}\n"))],
+    );
+    let output = refpinner(&moved, &registry, &["update", "--patch"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("tag 4.2.1 moved"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "");
+}
+
+#[test]
+fn update_preserves_variants_and_skips_ambiguous_compound_upgrades() {
+    let source = format!("image: node:4.2.1-alpine@{V421}\n");
+    let root = project("image-variant", &[(".gitlab-ci.yml", &source)]);
+    let registry = Registry::new(node_versions());
+
+    let output = refpinner(&root, &registry, &["update", "--patch"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("4.2.1-alpine -> 4.2.3-alpine\n"),
+        "{}",
+        stdout(&output)
+    );
+
+    let compound = project(
+        "image-compound",
+        &[(
+            ".gitlab-ci.yml",
+            &format!("image: node:4.2.3-alpine3.19@{V423}\n"),
+        )],
+    );
+    // No same-alpine primary upgrade exists, but alpine/component upgrades do → report.
+    let skipped = refpinner(&compound, &registry, &["update"]);
+    assert_eq!(skipped.status.code(), Some(2), "{}", stderr(&skipped));
+    assert!(
+        stderr(&skipped).contains("ambiguous compound update"),
+        "{}",
+        stderr(&skipped)
+    );
+    assert_eq!(stdout(&skipped), "");
+}
+
+#[test]
+fn image_prereleases_obey_release_policy_and_write_preserves_bytes() {
+    let source = format!("image: 'node:4.2.1@{V421}' # keep\n");
+    let root = project("image-pre", &[(".gitlab-ci.yml", &source)]);
+    let tags = r#"{"name":"library/node","tags":["4.2.1","4.3.0","4.4.0-rc.2","4.5.0-beta"]}"#;
+    let registry = Registry::new(vec![
+        (
+            "GET /v2/library/node/tags/list?n=1000",
+            200,
+            Vec::new(),
+            tags,
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.2.1",
+            200,
+            vec![("Docker-Content-Digest", V421)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.3.0",
+            200,
+            vec![("Docker-Content-Digest", V423)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.4.0-rc.2",
+            200,
+            vec![("Docker-Content-Digest", V410)],
+            "",
+        ),
+        (
+            "HEAD /v2/library/node/manifests/4.5.0-beta",
+            200,
+            vec![("Docker-Content-Digest", V510)],
+            "",
+        ),
+    ]);
+    let stable = refpinner(&root, &registry, &["update"]);
+    assert_eq!(stable.status.code(), Some(0), "{}", stderr(&stable));
+    assert!(
+        stdout(&stable).contains("4.2.1 -> 4.3.0\n"),
+        "{}",
+        stdout(&stable)
+    );
+    let rc = refpinner(&root, &registry, &["update", "--rc"]);
+    assert!(
+        stdout(&rc).contains("4.2.1 -> 4.4.0-rc.2\n"),
+        "{}",
+        stdout(&rc)
+    );
+    let pre = refpinner(&root, &registry, &["update", "--pre", "--write"]);
+    assert_eq!(pre.status.code(), Some(0), "{}", stderr(&pre));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+        format!("image: 'node:4.5.0-beta@{V510}' # keep\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml.bkp")).unwrap(),
+        source
+    );
+}
+
+#[test]
+fn version_rules_override_builtin_tag_interpretation() {
+    let root = project(
+        "image-rules",
+        &[
+            (
+                ".gitlab-ci.yml",
+                &format!("image: node:4.2.1-alpine@{V421}\n"),
+            ),
+            (
+                "refpinner.toml",
+                concat!(
+                    "version_rules = [\n",
+                    "  { pattern = \"node\", regex = \"^(?P<major>\\\\d+)\\\\.(?P<minor>\\\\d+)\\\\.(?P<patch>\\\\d+)-alpine$\" },\n",
+                    "  { pattern = \"node\", glob = \"{major}.{minor}.{patch}-custom\" },\n",
+                    "]\n",
+                ),
+            ),
+        ],
+    );
+    let mut routes = node_versions();
+    routes.push((
+        "HEAD /v2/library/node/manifests/4.10.0-custom",
+        200,
+        vec![("Docker-Content-Digest", V410)],
+        "",
+    ));
+    // Last matching rule wins: glob expects `-custom`, so alpine tags no longer match.
+    let tags = r#"{"name":"library/node","tags":["4.2.1-custom","4.2.3-custom","4.10.0-custom","4.2.1-alpine"]}"#;
+    routes[0] = (
+        "GET /v2/library/node/tags/list?n=1000",
+        200,
+        Vec::new(),
+        tags,
+    );
+    routes.push((
+        "HEAD /v2/library/node/manifests/4.2.1-custom",
+        200,
+        vec![("Docker-Content-Digest", V421)],
+        "",
+    ));
+    routes.push((
+        "HEAD /v2/library/node/manifests/4.2.3-custom",
+        200,
+        vec![("Docker-Content-Digest", V423)],
+        "",
+    ));
+    let registry = Registry::new(routes);
+
+    let output = refpinner(&root, &registry, &["update"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    // Current alpine tag does not match the last rule → not comparable → stay pinned.
+    assert_eq!(stdout(&output), "");
+
+    let custom = project(
+        "image-rules-custom",
+        &[
+            (
+                ".gitlab-ci.yml",
+                &format!("image: node:4.2.1-custom@{V421}\n"),
+            ),
+            (
+                "refpinner.toml",
+                "version_rules = [{ pattern = \"node\", glob = \"{major}.{minor}.{patch}-custom\" }]\n",
+            ),
+        ],
+    );
+    let output = refpinner(&custom, &registry, &["update", "--patch"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("4.2.1-custom -> 4.2.3-custom\n"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn opaque_image_tags_update_digest_without_changing_the_tag() {
+    let root = project(
+        "image-opaque",
+        &[(".gitlab-ci.yml", &format!("image: node:stable@{V421}\n"))],
+    );
+    let registry = Registry::new(vec![(
+        "HEAD /v2/library/node/manifests/stable",
+        200,
+        vec![("Docker-Content-Digest", V423)],
+        "",
+    )]);
+    let output = refpinner(&root, &registry, &["update", "--write"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("stable moved\n"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+        format!("image: node:stable@{V423}\n")
+    );
 }
