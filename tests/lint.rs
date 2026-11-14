@@ -323,6 +323,46 @@ fn git_ignore_rules_apply_in_git_folders_and_worktrees() {
 }
 
 #[test]
+fn tracked_ignored_workflows_are_discovered_but_untracked_ones_are_not() {
+    let root = tree(
+        "tracked-ignored",
+        &[
+            (".github/workflows/tracked.yml", UNPINNED_WORKFLOW),
+            (".github/workflows/untracked.yml", UNPINNED_WORKFLOW),
+            (".gitignore", ".github/workflows/*.yml\n"),
+        ],
+    );
+    let mut git = |args: &[&str]| {
+        let mut command = Command::new("git");
+        command.args(args).current_dir(&root);
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+        ] {
+            command.env_remove(key);
+        }
+        command
+            .output()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"))
+    };
+    assert!(git(&["init", "-q"]).status.success());
+    assert!(
+        git(&["add", "-f", ".github/workflows/tracked.yml"])
+            .status
+            .success()
+    );
+    let output = lint(&root);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        ".github/workflows/tracked.yml:4:15: unpinned owner/repo@v1\n"
+    );
+}
+
+#[test]
 fn exclusions_skip_discovered_files() {
     let root = tree(
         "excluded",

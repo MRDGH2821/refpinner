@@ -19,7 +19,7 @@ use crate::version::{self, Limit, Releases};
 pub fn run(
     scan: &Scan,
     write: bool,
-    limit: Limit,
+    limit: Option<Limit>,
     releases: Releases,
     follow_default_branch: bool,
     settings: &Actions,
@@ -31,13 +31,23 @@ pub fn run(
         write,
         State::Pinned,
         "update",
-        |file, source, reference| {
+        |input, source, reference| {
             // shortcut: image updates are handled by ticket #12.
             if reference.kind != Kind::Action {
                 return Ok(None);
             }
-            let (remote, action) = resolver.action(file, reference, settings)?;
-            plan(source, reference, remote, &action, limit, releases, follow)
+            let (remote, action) = resolver.action(input, reference, settings)?;
+            plan(
+                source,
+                reference,
+                remote,
+                &action,
+                limit
+                    .or_else(|| input.settings.limit(reference))
+                    .unwrap_or(Limit::Minor),
+                releases,
+                follow,
+            )
         },
     )
 }

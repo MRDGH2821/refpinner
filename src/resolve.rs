@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -17,7 +16,7 @@ pub struct Resolver {
 impl Resolver {
     pub fn action<'a>(
         &'a mut self,
-        file: &Path,
+        input: &crate::discover::Input,
         reference: &Reference,
         settings: &Actions,
     ) -> Result<(&'a mut Remote, String), String> {
@@ -31,9 +30,25 @@ impl Resolver {
         } else {
             format!(
                 "{}/{}",
-                settings
-                    .source(file, reference.reusable)?
-                    .trim_end_matches('/'),
+                Actions {
+                    forgejo_instance: settings
+                        .forgejo_instance
+                        .clone()
+                        .or_else(|| input.settings.forgejo_instance.clone()),
+                    forgejo_action_source: settings
+                        .forgejo_action_source
+                        .clone()
+                        .or_else(|| input.settings.forgejo_action_source.clone()),
+                }
+                .source_for(
+                    match input.platform {
+                        crate::config::Platform::Forgejo => ".forgejo",
+                        crate::config::Platform::Gitea => ".gitea",
+                        _ => ".github",
+                    },
+                    reference.reusable
+                )?
+                .trim_end_matches('/'),
                 action
             )
         };

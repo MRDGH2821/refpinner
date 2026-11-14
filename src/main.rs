@@ -1,3 +1,4 @@
+mod config;
 mod discover;
 mod edit;
 mod github;
@@ -29,6 +30,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check project configuration without network access
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Report pinned and unpinned references without network access
     Lint(discover::Scan),
     /// Preview pins for unpinned references; edit files only with --write
@@ -71,9 +77,21 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Validate discovered and inherited TOML files and patterns offline
+    Validate(discover::Scan),
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::Config {
+            command: ConfigCommand::Validate(scan),
+        } => match scan.files() {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(error) => lint::fail(&error.to_string()),
+        },
         Command::Lint(scan) => lint::run(&scan),
         Command::Pin { write, scan } => pin::run(&scan, write, &cli.actions),
         Command::Update { offline: true, .. } => {
@@ -81,6 +99,7 @@ fn main() -> ExitCode {
         }
         Command::Update {
             major,
+            minor,
             patch,
             pre,
             rc,
@@ -89,10 +108,23 @@ fn main() -> ExitCode {
             scan,
             ..
         } => {
-            let limit = match (major, patch) {
-                (true, _) => version::Limit::Major,
-                (_, true) => version::Limit::Patch,
-                _ => version::Limit::Minor,
+            let limit = match (major, minor, patch) {
+                (true, _, _) => Some(version::Limit::Major),
+                (_, true, _) => Some(version::Limit::Minor),
+                (_, _, true) => Some(version::Limit::Patch),
+                _ => match std::env::var("REFPINNER_UPDATE_LIMIT") {
+                    Ok(value) => match <version::Limit as clap::ValueEnum>::from_str(&value, false)
+                    {
+                        Ok(limit) => Some(limit),
+                        Err(_) => {
+                            return lint::fail(
+                                "REFPINNER_UPDATE_LIMIT must be major, minor or patch",
+                            );
+                        }
+                    },
+                    Err(std::env::VarError::NotPresent) => None,
+                    Err(_) => return lint::fail("REFPINNER_UPDATE_LIMIT must be valid Unicode"),
+                },
             };
             let releases = match (pre, rc) {
                 (true, _) => version::Releases::Pre,

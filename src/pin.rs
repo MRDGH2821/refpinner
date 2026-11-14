@@ -10,7 +10,6 @@ use crate::registry::Registry;
 use crate::resolve::{Remote, Resolution, Resolver};
 use crate::settings::Actions;
 use crate::{image, lint, write};
-use std::path::Path;
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
@@ -40,14 +39,14 @@ pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
         write,
         State::Unpinned,
         "pin",
-        |file, source, reference| {
+        |input, source, reference| {
             if reference.kind == Kind::Image {
                 return image_change(source, reference, &mut registry).map(Some);
             }
             if reference.kind == Kind::GitLab {
                 return crate::gitlab::plan(source, reference, &mut gitlab).map(Some);
             }
-            let (remote, action) = resolver.action(file, reference, settings)?;
+            let (remote, action) = resolver.action(input, reference, settings)?;
             let edits = edits(source, reference, remote, &action)?;
             // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
             let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
@@ -71,22 +70,26 @@ pub fn apply(
     write: bool,
     target: State,
     noun: &str,
-    mut plan: impl FnMut(&Path, &str, &Reference) -> Result<Option<Change>, String>,
+    mut plan: impl FnMut(&crate::discover::Input, &str, &Reference) -> Result<Option<Change>, String>,
 ) -> ExitCode {
-    let root = &scan.path;
+    let root = &scan
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| scan.path.clone());
     let files = match scan.files() {
         Ok(files) => files,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
     let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
-    for file in files {
-        let shown = display(file.strip_prefix(root).unwrap_or(&file));
-        let parsed = fs::read_to_string(&file)
+    for input in files {
+        let file = &input.path;
+        let shown = display(file.strip_prefix(root).unwrap_or(file));
+        let parsed = fs::read_to_string(file)
             .map_err(|error| error.to_string())
             .and_then(|source| {
                 let references =
-                    lint::references(&file, &source).map_err(|error| error.to_string())?;
+                    lint::references(input.platform, &source).map_err(|error| error.to_string())?;
                 Ok((source, references))
             });
         let (source, references) = match parsed {
@@ -104,6 +107,9 @@ pub fn apply(
         let mut chosen = Vec::new();
         let mut values = Vec::new();
         for reference in &references {
+            if !input.settings.includes(reference, scan.include_excluded) {
+                continue;
+            }
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
             match reference.state {
                 State::Warning => {
@@ -121,7 +127,7 @@ pub fn apply(
                 }
                 _ => {}
             }
-            match plan(&file, &source, reference) {
+            match plan(&input, &source, reference) {
                 Ok(Some(change)) => {
                     let mut header = format!("{location}: {}", reference.text);
                     if !change.summary.is_empty() {
@@ -150,7 +156,7 @@ pub fn apply(
         if chosen.is_empty() {
             continue;
         }
-        match write::replace(&file, &source, &chosen, &values) {
+        match write::replace(file, &source, &chosen, &values) {
             Ok(backup) => println!(
                 "wrote {shown} (backup {})",
                 display(backup.strip_prefix(root).unwrap_or(&backup))

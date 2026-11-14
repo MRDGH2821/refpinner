@@ -12,9 +12,7 @@ pub struct Actions {
 }
 
 impl Actions {
-    /// Source of shorthand references; reusable workflows belong to the instance itself.
-    pub fn source(&self, file: &Path, reusable: bool) -> Result<String, String> {
-        let platform = platform(file);
+    pub fn source_for(&self, platform: &str, reusable: bool) -> Result<String, String> {
         if platform == ".github" {
             return Ok(String::from("https://github.com"));
         }
@@ -45,7 +43,7 @@ impl Actions {
 }
 
 /// Directory names take precedence; root action metadata uses the nearest project marker.
-fn platform(file: &Path) -> &'static str {
+pub fn platform(file: &Path) -> &'static str {
     const MARKERS: [&str; 3] = [".forgejo", ".gitea", ".github"];
     for component in file.components().rev() {
         if let Some(marker) = MARKERS
@@ -74,36 +72,22 @@ mod tests {
     fn shorthand_defaults_follow_the_platform_not_the_instance_host() {
         let settings = Actions::default();
         assert_eq!(
-            settings
-                .source(Path::new(".forgejo/workflows/ci.yml"), false)
-                .unwrap(),
+            settings.source_for(".forgejo", false).unwrap(),
             "https://data.forgejo.org"
         );
         assert_eq!(
-            settings
-                .source(Path::new(".gitea/workflows/ci.yml"), false)
-                .unwrap(),
+            settings.source_for(".gitea", false).unwrap(),
             "https://github.com"
         );
         assert_eq!(
-            settings
-                .source(Path::new(".github/workflows/ci.yml"), true)
-                .unwrap(),
+            settings.source_for(".github", true).unwrap(),
             "https://github.com"
         );
-        assert!(
-            settings
-                .source(Path::new(".forgejo/workflows/ci.yml"), true)
-                .is_err()
-        );
+        assert!(settings.source_for(".forgejo", true).is_err());
         let settings = Actions {
             forgejo_instance: None,
             forgejo_action_source: Some("self".into()),
         };
-        assert!(
-            settings
-                .source(Path::new(".forgejo/workflows/ci.yml"), false)
-                .is_err()
-        );
+        assert!(settings.source_for(".forgejo", false).is_err());
     }
 }

@@ -1,11 +1,11 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
 use saphyr::ScanError;
 
-use crate::discover::{self, Scan};
+use crate::config::Platform;
+use crate::discover::Scan;
 use crate::reference::{Reference, State};
 use crate::{github, image};
 
@@ -18,7 +18,10 @@ const ERROR: u8 = 2;
 
 /// Lints the files selected by `scan` offline and prints one line per reference.
 pub fn run(scan: &Scan) -> ExitCode {
-    let root = &scan.path;
+    let root = &scan
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| scan.path.clone());
     let files = match scan.files() {
         Ok(files) if !files.is_empty() => files,
         Ok(_) => {
@@ -30,11 +33,14 @@ pub fn run(scan: &Scan) -> ExitCode {
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
     let mut status = OK;
-    for file in files {
+    for input in files {
+        let file = input.path;
         let shown = display(file.strip_prefix(root).unwrap_or(&file));
         let parsed = fs::read_to_string(&file)
             .map_err(|error| error.to_string())
-            .and_then(|source| references(&file, &source).map_err(|error| error.to_string()));
+            .and_then(|source| {
+                references(input.platform, &source).map_err(|error| error.to_string())
+            });
         let references = match parsed {
             Ok(references) => references,
             Err(error) => {
@@ -44,6 +50,9 @@ pub fn run(scan: &Scan) -> ExitCode {
             }
         };
         for reference in references {
+            if !input.settings.includes(&reference, scan.include_excluded) {
+                continue;
+            }
             let state = match reference.state {
                 State::Pinned => "pinned",
                 State::Unpinned => "unpinned",
@@ -62,8 +71,8 @@ pub fn run(scan: &Scan) -> ExitCode {
 }
 
 /// Extracts references using the file's platform.
-pub fn references(file: &Path, source: &str) -> Result<Vec<Reference>, ScanError> {
-    if file.file_name() == Some(OsStr::new(discover::GITLAB_CI)) {
+pub fn references(platform: Platform, source: &str) -> Result<Vec<Reference>, ScanError> {
+    if platform == Platform::Gitlab {
         let mut references = image::gitlab(source)?;
         references.extend(
             crate::gitlab::references(source)?
