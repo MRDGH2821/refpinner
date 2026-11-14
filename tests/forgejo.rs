@@ -365,3 +365,38 @@ fn discovers_forge_workflows_and_composites_preserving_local_and_warning_semanti
         "{text}"
     );
 }
+
+#[test]
+fn mixed_forgejo_action_and_image_are_written_together() {
+    let source =
+        "jobs:\n  build:\n    container: node:18\n    steps:\n      - uses: team/repo@main\n";
+    let root = project("mixed-image", &[(".forgejo/workflows/ci.yml", source)]);
+    let action = Forge::new(&branches());
+    let registry = Forge::new(&[("/v2/library/node/manifests/18", 200, "{}")]);
+    let output = Command::new(env!("CARGO_BIN_EXE_refpinner"))
+        .current_dir(&root)
+        .args(["pin", "--write", "--forgejo-action-source", &action.url])
+        .env("REFPINNER_REGISTRY_URL", &registry.url)
+        .env_remove("HTTP_PROXY")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("ALL_PROXY")
+        .output()
+        .expect("run refpinner");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result =
+        std::fs::read_to_string(root.join(".forgejo/workflows/ci.yml")).expect("read workflow");
+    assert!(
+        result.contains("team/repo@1111111111111111111111111111111111111111 # main"),
+        "{result}"
+    );
+    assert!(result.contains("node:18@sha256:"), "{result}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".forgejo/workflows/ci.yml.bkp")).expect("backup"),
+        source
+    );
+    assert_eq!(
+        action.count("/api/v1/repos/team/repo/git/refs/heads/main"),
+        1
+    );
+    assert_eq!(registry.count("/v2/library/node/manifests/18"), 2);
+}

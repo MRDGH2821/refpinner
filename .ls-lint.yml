@@ -16,16 +16,17 @@ ignore:
   - "**/.cursor/**"
   - "**/.opencode/**"
   - "**/.worktrees/**"
-  - .git
-  - .gradle
-  - .pytest_cache
-  - .venv
-  - .worktrees
-  - __pycache__
-  - apm_modules
-  - build
-  - dist
-  - node_modules
+  - "**/target/**"
+  - ".git"
+  - ".gradle"
+  - ".pytest_cache"
+  - ".venv"
+  - ".worktrees"
+  - "__pycache__"
+  - "apm_modules"
+  - "build"
+  - "dist"
+  - "node_modules"
   - result # Nix build result symlink
   - target # Rust/Java build output
   - venv

@@ -5,10 +5,11 @@ use std::process::ExitCode;
 use crate::discover::Scan;
 use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
-use crate::reference::{Reference, State};
+use crate::reference::{Kind, Reference, State};
+use crate::registry::Registry;
 use crate::resolve::{Remote, Resolution, Resolver};
 use crate::settings::Actions;
-use crate::{github, write};
+use crate::{image, lint, write};
 use std::path::Path;
 
 /// Exit status when every reference resolved.
@@ -32,12 +33,16 @@ pub struct Change {
 /// user picks each pin; otherwise every pin that resolved is applied.
 pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
     let mut resolver = Resolver::default();
+    let mut registry = Registry::from_env();
     apply(
         scan,
         write,
         State::Unpinned,
         "pin",
         |file, source, reference| {
+            if reference.kind == Kind::Image {
+                return image_change(source, reference, &mut registry).map(Some);
+            }
             let (remote, action) = resolver.action(file, reference, settings)?;
             let edits = edits(source, reference, remote, &action)?;
             // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
@@ -76,7 +81,8 @@ pub fn apply(
         let parsed = fs::read_to_string(&file)
             .map_err(|error| error.to_string())
             .and_then(|source| {
-                let references = github::references(&source).map_err(|error| error.to_string())?;
+                let references =
+                    lint::references(&file, &source).map_err(|error| error.to_string())?;
                 Ok((source, references))
             });
         let (source, references) = match parsed {
@@ -165,14 +171,7 @@ pub fn edits(
     remote: &mut Remote,
     action: &str,
 ) -> Result<Vec<Edit>, String> {
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
-    if inner != reference.text {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
+    let quoted = quoted(source, reference)?;
     let after = &source[reference.span.end..line_end(source, reference.span.end)];
     if !(after.trim().is_empty() || after.trim_start().starts_with('#')) {
         return Err(String::from(
@@ -197,6 +196,46 @@ pub fn edits(
             text: format!(" # {}", annotation(revision, &resolution)),
         },
     ])
+}
+
+/// Computes the pin of an image `reference` to the digest its tag names now.
+///
+/// The tag stays in the value as the annotation, `name:tag@sha256:...`; an implicit tag is
+/// written out as `:latest`. The value keeps its quoting and any comment.
+fn image_change(
+    source: &str,
+    reference: &Reference,
+    registry: &mut Registry,
+) -> Result<Change, String> {
+    let quoted = quoted(source, reference)?;
+    let name = image::parse(&reference.text)?;
+    let digest = registry.resolve(&name)?;
+    let tag = if name.tag.is_none() { ":latest" } else { "" };
+    let text = format!("{tag}@{digest}");
+    let end = reference.span.end - usize::from(quoted);
+    Ok(Change {
+        summary: String::new(),
+        value: format!("{}{text}", reference.text),
+        edits: vec![Edit {
+            start: end,
+            end,
+            text,
+        }],
+    })
+}
+
+/// Reports whether the value of `reference` is quoted; fails when the source spells it
+/// differently from its text, such as with escapes or line breaks.
+fn quoted(source: &str, reference: &Reference) -> Result<bool, String> {
+    let raw = &source[reference.span.clone()];
+    let quoted = raw.starts_with(['"', '\'']);
+    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
+    if inner != reference.text {
+        return Err(String::from(
+            "cannot edit a reference with escapes or line breaks",
+        ));
+    }
+    Ok(quoted)
 }
 
 /// Records the exact version when known and the source track when it differs.
