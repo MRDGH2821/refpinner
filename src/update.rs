@@ -5,7 +5,8 @@ use crate::discover::Scan;
 use crate::edit::Edit;
 use crate::pin::{self, Change, line_end};
 use crate::reference::{Reference, State};
-use crate::resolve::GitHub;
+use crate::resolve::{Remote, Resolver};
+use crate::settings::Actions;
 use crate::version::{self, Limit};
 
 /// Previews updates of the pinned references in the files selected by `scan`.
@@ -15,19 +16,33 @@ use crate::version::{self, Limit};
 /// unannotated pin follows the default branch only with `follow_default_branch`, or after
 /// the user confirms the previewed update in an interactive write. With `write`, updates are
 /// applied as `pin --write` applies pins.
-pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) -> ExitCode {
-    let mut github = GitHub::from_env();
+pub fn run(
+    scan: &Scan,
+    write: bool,
+    limit: Limit,
+    follow_default_branch: bool,
+    settings: &Actions,
+) -> ExitCode {
+    let mut resolver = Resolver::default();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
-    pin::apply(scan, write, State::Pinned, "update", |source, reference| {
-        plan(source, reference, &mut github, limit, follow)
-    })
+    pin::apply(
+        scan,
+        write,
+        State::Pinned,
+        "update",
+        |file, source, reference| {
+            let (remote, action) = resolver.action(file, reference, settings)?;
+            plan(source, reference, remote, &action, limit, follow)
+        },
+    )
 }
 
 /// Computes the update of one pinned reference, or `None` when it is up to date.
 fn plan(
     source: &str,
     reference: &Reference,
-    github: &mut GitHub,
+    github: &mut Remote,
+    repository: &str,
     limit: Limit,
     follow: bool,
 ) -> Result<Option<Change>, String> {
@@ -65,8 +80,8 @@ fn plan(
                 "pin has no annotation; pass --follow-default-branch to follow the default branch",
             ));
         }
-        let branch = github.default_branch(action)?;
-        let tip = github.resolve(action, &branch)?.commit;
+        let branch = github.default_branch(repository)?;
+        let tip = github.resolve(repository, &branch)?.commit;
         let at = (reference.span.end, reference.span.end);
         return Ok((tip != commit).then(|| {
             change(
@@ -80,12 +95,12 @@ fn plan(
     let at = (note.start, note.end);
     let Some(current) = version::parse(&note.version) else {
         // A branch or other moving ref: its new commit is the update.
-        let tip = github.resolve(action, &note.version)?.commit;
+        let tip = github.resolve(repository, &note.version)?.commit;
         let summary = format!("{} moved", note.version);
         return Ok((tip != commit).then(|| change(summary, tip, at, note.version.clone())));
     };
     let (exact, current, track) = if current.len() >= 3 || note.track.is_some() {
-        let tagged = github.resolve(action, &note.version)?.commit;
+        let tagged = github.resolve(repository, &note.version)?.commit;
         if tagged != commit {
             return Err(format!(
                 "tag {} moved to {tagged}; review it before updating",
@@ -93,7 +108,7 @@ fn plan(
             ));
         }
         (note.version.clone(), current, note.track.clone())
-    } else if let Some(exact) = github.exact(action, &note.version, commit)? {
+    } else if let Some(exact) = github.exact(repository, &note.version, commit)? {
         let parsed = version::parse(&exact).ok_or("exact version is not a version")?;
         (exact, parsed, Some(note.version.clone()))
     } else if limit == Limit::Patch {
@@ -103,7 +118,7 @@ fn plan(
         ));
     } else {
         // Without an exact version the floating tag itself is the track to follow.
-        let moved = github.resolve(action, &note.version)?;
+        let moved = github.resolve(repository, &note.version)?;
         let summary = format!("track {} moved", note.version);
         let text = match moved.version.filter(|exact| *exact != note.version) {
             Some(exact) => format!("{exact} (track: {})", note.version),
@@ -116,7 +131,7 @@ fn plan(
             .trim_start_matches(|c: char| !c.is_ascii_digit())
             .len()];
     let best = github
-        .tags(action, prefix)?
+        .tags(repository, prefix)?
         .into_iter()
         .filter(|name| {
             name.strip_prefix(prefix)
@@ -128,7 +143,7 @@ fn plan(
     let Some((chosen, name)) = best else {
         return Ok(None);
     };
-    let tip = github.resolve(action, &name)?.commit;
+    let tip = github.resolve(repository, &name)?.commit;
     // A track keeps its precision and follows the version, so a major upgrade moves `v4` to `v5`.
     let track = track.map(|track| match version::parse(&track) {
         Some(parts) if parts.len() <= chosen.len() => {

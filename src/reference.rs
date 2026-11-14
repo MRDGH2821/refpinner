@@ -12,6 +12,8 @@ pub struct Reference {
     pub state: State,
     /// Byte range of the value in the source, including any quotes; empty for warnings.
     pub span: Range<usize>,
+    /// Job-level reusable workflows resolve shorthand on the current forge instance.
+    pub reusable: bool,
 }
 
 /// Lint classification of a [`Reference`].

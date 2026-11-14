@@ -6,8 +6,10 @@ use crate::discover::Scan;
 use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
 use crate::reference::{Reference, State};
-use crate::resolve::{GitHub, Resolution};
+use crate::resolve::{Remote, Resolution, Resolver};
+use crate::settings::Actions;
 use crate::{github, write};
+use std::path::Path;
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
@@ -28,19 +30,26 @@ pub struct Change {
 ///
 /// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
 /// user picks each pin; otherwise every pin that resolved is applied.
-pub fn run(scan: &Scan, write: bool) -> ExitCode {
-    let mut github = GitHub::from_env();
-    apply(scan, write, State::Unpinned, "pin", |source, reference| {
-        let edits = edits(source, reference, &mut github)?;
-        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
-        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
-        let value = format!("{action}@{}", edits[0].text);
-        Ok(Some(Change {
-            summary: String::new(),
-            edits,
-            value,
-        }))
-    })
+pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
+    let mut resolver = Resolver::default();
+    apply(
+        scan,
+        write,
+        State::Unpinned,
+        "pin",
+        |file, source, reference| {
+            let (remote, action) = resolver.action(file, reference, settings)?;
+            let edits = edits(source, reference, remote, &action)?;
+            // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
+            let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
+            let value = format!("{action}@{}", edits[0].text);
+            Ok(Some(Change {
+                summary: String::new(),
+                edits,
+                value,
+            }))
+        },
+    )
 }
 
 /// Previews the change `plan` returns for each `target` reference in the files selected by
@@ -53,7 +62,7 @@ pub fn apply(
     write: bool,
     target: State,
     noun: &str,
-    mut plan: impl FnMut(&str, &Reference) -> Result<Option<Change>, String>,
+    mut plan: impl FnMut(&Path, &str, &Reference) -> Result<Option<Change>, String>,
 ) -> ExitCode {
     let root = &scan.path;
     let files = match scan.files() {
@@ -102,7 +111,7 @@ pub fn apply(
                 }
                 _ => {}
             }
-            match plan(&source, reference) {
+            match plan(&file, &source, reference) {
                 Ok(Some(change)) => {
                     let mut header = format!("{location}: {}", reference.text);
                     if !change.summary.is_empty() {
@@ -153,7 +162,8 @@ fn confirm(noun: &str) -> bool {
 pub fn edits(
     source: &str,
     reference: &Reference,
-    github: &mut GitHub,
+    remote: &mut Remote,
+    action: &str,
 ) -> Result<Vec<Edit>, String> {
     let raw = &source[reference.span.clone()];
     let quoted = raw.starts_with(['"', '\'']);
@@ -169,11 +179,11 @@ pub fn edits(
             "cannot annotate a reference followed by other content",
         ));
     }
-    let (action, revision) = reference
+    let (_, revision) = reference
         .text
         .rsplit_once('@')
         .ok_or("reference has no @revision")?;
-    let resolution = github.resolve(action, revision)?;
+    let resolution = remote.resolve(action, revision)?;
     let revision_end = reference.span.end - usize::from(quoted);
     Ok(vec![
         Edit {

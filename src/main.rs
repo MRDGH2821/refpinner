@@ -5,6 +5,7 @@ mod lint;
 mod pin;
 mod reference;
 mod resolve;
+mod settings;
 mod update;
 mod version;
 mod write;
@@ -16,6 +17,8 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
+    #[command(flatten)]
+    actions: settings::Actions,
     #[command(subcommand)]
     command: Command,
 }
@@ -59,9 +62,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    match cli.command {
         Command::Lint(scan) => lint::run(&scan),
-        Command::Pin { write, scan } => pin::run(&scan, write),
+        Command::Pin { write, scan } => pin::run(&scan, write, &cli.actions),
         Command::Update { offline: true, .. } => {
             lint::fail("update needs network access and cannot run offline")
         }
@@ -78,7 +82,7 @@ fn main() -> ExitCode {
                 (_, true) => version::Limit::Patch,
                 _ => version::Limit::Minor,
             };
-            update::run(&scan, write, limit, follow_default_branch)
+            update::run(&scan, write, limit, follow_default_branch, &cli.actions)
         }
     }
 }

@@ -57,7 +57,8 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
                 .flatten()
                 .filter(|step| !aliased(step))
                 .filter_map(|step| step.data.as_mapping_get("uses"));
-            for uses in job.data.as_mapping_get("uses").into_iter().chain(steps) {
+            let reusable = job.data.as_mapping_get("uses").map(|uses| (uses, true));
+            for (uses, reusable) in reusable.into_iter().chain(steps.map(|uses| (uses, false))) {
                 let Some(text) = uses.data.as_str().filter(|_| !aliased(uses)) else {
                     continue;
                 };
@@ -81,6 +82,7 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
                         State::Unpinned
                     },
                     span: value_span(source, byte_offset(source, uses.span.start.index()), text),
+                    reusable,
                 });
             }
         }
@@ -96,6 +98,7 @@ fn warning(at: Marker, text: String) -> Reference {
         text,
         state: State::Warning,
         span: 0..0,
+        reusable: false,
     }
 }
 

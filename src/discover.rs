@@ -111,7 +111,7 @@ fn explicit(files: &[PathBuf]) -> Vec<PathBuf> {
 /// folder or worktree file) or a `.github` folder.
 fn is_project(file: &Path) -> bool {
     let folder = file.parent().unwrap_or(file);
-    [".git", ".github"]
+    [".git", ".github", ".forgejo", ".gitea"]
         .iter()
         .any(|marker| folder.join(marker).symlink_metadata().is_ok())
 }
@@ -145,7 +145,11 @@ fn location(relative: &Path) -> Option<Location> {
         relative.file_name().and_then(OsStr::to_str),
         Some("action.yml" | "action.yaml")
     );
-    let Some(ci) = parts.iter().position(|part| *part == ".github") else {
+    let Some(ci) = parts.iter().position(|part| {
+        [".github", ".forgejo", ".gitea"]
+            .iter()
+            .any(|name| *part == *name)
+    }) else {
         return match depth {
             1 if action => Some(Location::CiFile),
             _ if action && depth <= PROJECT_DEPTH + 1 => Some(Location::ProjectAction),
@@ -159,7 +163,12 @@ fn location(relative: &Path) -> Option<Location> {
     let folder = parts.get(ci + 1).and_then(|part| part.to_str());
     match (depth - ci, folder) {
         (1, _) | (2, Some("workflows")) => Some(Location::Ci),
-        (3, Some("workflows")) if is_yaml(relative) => Some(Location::CiFile),
+        (_, Some("workflows"))
+            if is_yaml(relative) && (depth - ci == 3 || parts[ci] != ".github") =>
+        {
+            Some(Location::CiFile)
+        }
+        (_, Some("workflows")) if parts[ci] != ".github" => Some(Location::Ci),
         (_, Some("actions")) if action => Some(Location::CiFile),
         (_, Some("actions")) => Some(Location::Ci),
         _ => None,
