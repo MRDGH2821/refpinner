@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use crate::discover::Scan;
 use crate::edit::Edit;
 use crate::pin::{self, Change, line_end};
-use crate::reference::{Reference, State};
+use crate::reference::{Kind, Reference, State};
 use crate::resolve::GitHub;
 use crate::version::{self, Limit};
 
@@ -29,6 +29,9 @@ pub fn run(
         State::Pinned,
         "update",
         |input, source, reference| {
+            if reference.kind == Kind::Image {
+                return Ok(None);
+            }
             let limit = limit
                 .or_else(|| input.settings.limit(reference))
                 .unwrap_or(Limit::Minor);

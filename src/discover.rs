@@ -7,6 +7,16 @@ use ignore::overrides::OverrideBuilder;
 
 use crate::lint::display;
 
+/// GitLab's default CI file name; custom CI file paths are not discovered.
+pub const GITLAB_CI: &str = ".gitlab-ci.yml";
+
+/// Reports whether `file` is a Forgejo or Gitea workflow, whose action shorthand resolves
+/// against its own instance instead of GitHub.
+pub fn is_forgejo(file: &Path) -> bool {
+    file.components()
+        .any(|part| matches!(part.as_os_str().to_str(), Some(".forgejo" | ".gitea")))
+}
+
 /// Project folders deeper than this many levels below the scan path are not discovered (ADR 0001).
 const PROJECT_DEPTH: usize = 2;
 
@@ -176,8 +186,9 @@ fn excluded(matcher: &ignore::overrides::Override, root: &Path, file: &Path) -> 
 }
 
 /// Returns the recognized CI files of each project, sorted. A project is `root` or a folder up
-/// to two levels below it. Its CI files are `.github/workflows/*.{yml,yaml}`, and
-/// `action.{yml,yaml}` at the project root or anywhere under `.github/actions`.
+/// to two levels below it. Its CI files are `.github/workflows/*.{yml,yaml}`, the same under
+/// `.forgejo` and `.gitea`, `.gitlab-ci.yml`, and `action.{yml,yaml}` at the project root or
+/// anywhere under `.github/actions`.
 ///
 /// Git ignore rules apply inside Git repositories, whether `.git` is a folder or a worktree
 /// file. Symlinks are never followed.
@@ -263,9 +274,11 @@ fn relative<'a>(root: &Path, path: &'a Path) -> &'a Path {
 enum Location {
     /// A path at most two levels below the scan root, which may be a project folder.
     Project,
-    /// A recognized CI folder: `.github`, `.github/workflows` or `.github/actions/**`.
+    /// A recognized CI folder: `.github`, `.github/workflows` or `.github/actions/**`, or the
+    /// `.forgejo` and `.gitea` equivalents of the first two.
     Ci,
-    /// A GitHub workflow file, action metadata under `.github/actions`, or at the scan root.
+    /// A workflow file, action metadata under `.github/actions` or at the scan root, or a
+    /// GitLab CI file.
     CiFile,
     /// Action metadata in a folder below the scan root; read only when that folder is a project.
     ProjectAction,
@@ -285,9 +298,14 @@ fn location(relative: &Path) -> Option<Location> {
         relative.file_name().and_then(OsStr::to_str),
         Some("action.yml" | "action.yaml")
     );
-    let Some(ci) = parts.iter().position(|part| *part == ".github") else {
+    let gitlab = relative.file_name() == Some(OsStr::new(GITLAB_CI));
+    let Some(ci) = parts
+        .iter()
+        .position(|part| matches!(part.to_str(), Some(".github" | ".forgejo" | ".gitea")))
+    else {
         return match depth {
             1 if action => Some(Location::CiFile),
+            _ if gitlab && depth <= PROJECT_DEPTH + 1 => Some(Location::CiFile),
             _ if action && depth <= PROJECT_DEPTH + 1 => Some(Location::ProjectAction),
             _ if depth <= PROJECT_DEPTH => Some(Location::Project),
             _ => None,
@@ -296,12 +314,13 @@ fn location(relative: &Path) -> Option<Location> {
     if ci > PROJECT_DEPTH {
         return None;
     }
+    let github = parts[ci] == ".github";
     let folder = parts.get(ci + 1).and_then(|part| part.to_str());
     match (depth - ci, folder) {
         (1, _) | (2, Some("workflows")) => Some(Location::Ci),
         (3, Some("workflows")) if is_yaml(relative) => Some(Location::CiFile),
-        (_, Some("actions")) if action => Some(Location::CiFile),
-        (_, Some("actions")) => Some(Location::Ci),
+        (_, Some("actions")) if github && action => Some(Location::CiFile),
+        (_, Some("actions")) if github => Some(Location::Ci),
         _ => None,
     }
 }

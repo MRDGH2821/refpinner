@@ -1,0 +1,210 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::image::{Name, is_digest};
+
+/// Environment variable that sends every registry request to one base URL, for tests or a
+/// pull-through mirror. Paths stay `/v2/<repository>/...`.
+const URL_VAR: &str = "REFPINNER_REGISTRY_URL";
+
+/// Index types come first so a multi-platform image resolves to its index digest, not to
+/// the manifest of one platform.
+const ACCEPT: &str = concat!(
+    "application/vnd.oci.image.index.v1+json, ",
+    "application/vnd.docker.distribution.manifest.list.v2+json, ",
+    "application/vnd.oci.image.manifest.v1+json, ",
+    "application/vnd.docker.distribution.manifest.v2+json",
+);
+
+/// Resolves image tags to manifest digests through the OCI distribution API, once per
+/// registry, repository and tag.
+pub struct Registry {
+    base: Option<String>,
+    agent: ureq::Agent,
+    cache: HashMap<String, Result<String, String>>,
+}
+
+impl Registry {
+    /// Uses `REFPINNER_REGISTRY_URL` for every registry when set, otherwise
+    /// `https://<registry host>`.
+    pub fn from_env() -> Self {
+        let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(30)))
+            .build()
+            .into();
+        Self {
+            base: std::env::var(URL_VAR)
+                .ok()
+                .map(|url| url.trim_end_matches('/').to_owned()),
+            agent,
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Returns the `sha256:` digest the tag of `name` (`latest` when omitted) points to now.
+    pub fn resolve(&mut self, name: &Name) -> Result<String, String> {
+        let tag = name.tag.as_deref().unwrap_or("latest");
+        let key = format!("{}/{}:{tag}", name.host, name.repository);
+        if let Some(cached) = self.cache.get(&key) {
+            return cached.clone();
+        }
+        let resolved = self.lookup(name, tag);
+        self.cache.insert(key, resolved.clone());
+        resolved
+    }
+
+    fn lookup(&self, name: &Name, tag: &str) -> Result<String, String> {
+        let base = self
+            .base
+            .clone()
+            .unwrap_or_else(|| format!("https://{}", name.host));
+        let url = format!("{base}/v2/{}/manifests/{tag}", name.repository);
+        let mut token = None;
+        let mut response = self.manifest(&url, true, None)?;
+        if response.status().as_u16() == 401 {
+            let challenge = header(&response, "www-authenticate").unwrap_or_default();
+            token = Some(self.token(&challenge)?);
+            response = self.manifest(&url, true, token.as_deref())?;
+        }
+        let repository = &name.repository;
+        match response.status().as_u16() {
+            200 => {}
+            404 => return Err(format!("no tag {tag} in {} image {repository}", name.host)),
+            status => {
+                return Err(format!(
+                    "registry {} returned HTTP {status} for {repository}:{tag}",
+                    name.host
+                ));
+            }
+        }
+        if let Some(digest) = header(&response, "docker-content-digest").filter(|d| is_digest(d)) {
+            return Ok(digest);
+        }
+        // The header is optional in older registries; the digest is the hash of the exact bytes.
+        let mut response = self.manifest(&url, false, token.as_deref())?;
+        if response.status().as_u16() != 200 {
+            return Err(format!(
+                "registry {} returned HTTP {} for {repository}:{tag}",
+                name.host,
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .body_mut()
+            .read_to_vec()
+            .map_err(|error| format!("cannot read manifest of {repository}:{tag}: {error}"))?;
+        let hash = ring::digest::digest(&ring::digest::SHA256, &bytes);
+        let hex: String = hash.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        Ok(format!("sha256:{hex}"))
+    }
+
+    /// Sends `HEAD` (no pull counted on Docker Hub) or `GET` for a manifest.
+    fn manifest(
+        &self,
+        url: &str,
+        head: bool,
+        token: Option<&str>,
+    ) -> Result<ureq::http::Response<ureq::Body>, String> {
+        let request = if head {
+            self.agent.head(url)
+        } else {
+            self.agent.get(url)
+        };
+        let request = request.header("Accept", ACCEPT);
+        let request = match token {
+            Some(token) => request.header("Authorization", format!("Bearer {token}")),
+            None => request,
+        };
+        request
+            .call()
+            .map_err(|error| format!("cannot reach registry: {error}"))
+    }
+
+    /// Gets an anonymous token from the realm named by a `Bearer` challenge.
+    ///
+    /// shortcut: no credentials are sent, so only public images resolve; the auth ticket
+    /// (#14) adds them, scoped to the registry host that issued the challenge.
+    fn token(&self, challenge: &str) -> Result<String, String> {
+        let params = challenge
+            .split_once(' ')
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+            .map(|(_, params)| parameters(params))
+            .ok_or("registry requires authentication, which is not supported yet")?;
+        let get = |key: &str| {
+            params
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        let realm = get("realm")
+            .filter(|realm| realm.starts_with("https://") || realm.starts_with("http://"))
+            .ok_or("registry sent a token challenge without an HTTP realm")?;
+        let mut url = realm.to_owned();
+        for (key, value) in [("service", get("service")), ("scope", get("scope"))] {
+            if let Some(value) = value {
+                url.push(if url.contains('?') { '&' } else { '?' });
+                url.push_str(&format!("{key}={}", encode(value)));
+            }
+        }
+        let mut response = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|error| format!("cannot reach registry token service: {error}"))?;
+        if response.status().as_u16() != 200 {
+            return Err(format!(
+                "registry token service returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| format!("cannot read registry token: {error}"))?;
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|error| format!("invalid registry token response: {error}"))?;
+        json["token"]
+            .as_str()
+            .or(json["access_token"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| String::from("registry token response has no token"))
+    }
+}
+
+fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Parses the `key="value"` pairs of an RFC 6750 challenge; values hold no quotes.
+fn parameters(text: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut rest = text.trim();
+    while let Some((key, after)) = rest.split_once('=') {
+        let key = key.trim().trim_start_matches(',').trim().to_owned();
+        let (value, tail) = match after.strip_prefix('"') {
+            Some(quoted) => quoted.split_once('"').unwrap_or((quoted, "")),
+            None => after.split_once(',').unwrap_or((after, "")),
+        };
+        pairs.push((key, value.to_owned()));
+        rest = tail.trim_start_matches(',').trim();
+    }
+    pairs
+}
+
+/// Percent-encodes a query value; `:` and `/` are valid in a query (RFC 3986) and stay readable.
+fn encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b'/') {
+            encoded.push(char::from(b));
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    encoded
+}
