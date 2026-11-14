@@ -27,8 +27,9 @@ ignore:
   - "build"
   - "dist"
   - "node_modules"
-  - "result # Nix build result symlink"
-  - "venv"
+  - result # Nix build result symlink
+  - target # Rust/Java build output
+  - venv
   # keep-sorted end
 ls:
   .cjs: kebab-case

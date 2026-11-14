@@ -629,6 +629,8 @@ fn backup_takes_next_free_number_skips_symlinks_keeps_permissions_and_repeat_run
         want.insert(2, "ci.yml.bkp2");
     }
     assert_eq!(names, want);
+    #[cfg(unix)]
+    std::fs::remove_file(dir.join("ci.yml.bkp2")).expect("remove test symlink");
 }
 
 /// A read-only directory makes the backup fail; root ignores directory permissions.

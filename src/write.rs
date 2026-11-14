@@ -41,11 +41,13 @@ pub fn replace(
     let backup = backup(path, original.as_bytes(), &meta.permissions())
         .map_err(|error| format!("cannot create backup: {error}"))?;
     let temp = sibling(path, &format!(".{}.tmp", std::process::id()), true);
-    let written = create(&temp, replacement.as_bytes(), &meta.permissions())
-        .and_then(|()| fs::rename(&temp, path));
+    let written = create(&temp, replacement.as_bytes(), &meta.permissions()).and_then(|()| {
+        fs::rename(&temp, path).inspect_err(|_| {
+            let _ = fs::remove_file(&temp);
+        })
+    });
     if let Err(error) = written {
         // Backups exist only for files that changed.
-        let _ = fs::remove_file(&temp);
         let _ = fs::remove_file(&backup);
         return Err(format!("cannot replace file: {error}"));
     }
@@ -155,7 +157,42 @@ pub fn validate(original: &str, replacement: &str, values: &[Value]) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{Value, validate};
+    use super::{Value, replace, sibling, validate};
+    use crate::edit::Edit;
+
+    #[test]
+    fn occupied_temporary_file_is_not_deleted() {
+        let root =
+            std::env::temp_dir().join(format!("refpinner-write-collision-{}", std::process::id()));
+        std::fs::create_dir(&root).expect("create test directory");
+        let file = root.join("workflow.yml");
+        let original = "a: x@v1\n";
+        std::fs::write(&file, original).expect("write workflow");
+        let temp = sibling(&file, &format!(".{}.tmp", std::process::id()), true);
+        std::fs::write(&temp, "do not delete").expect("occupy temporary path");
+        let edits = [Edit {
+            start: 3,
+            end: 7,
+            text: String::from("x@ab"),
+        }];
+        let result = replace(
+            &file,
+            original,
+            &edits,
+            &[Value::Scalar(1, 4, String::from("x@ab"))],
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read original"),
+            original
+        );
+        assert_eq!(
+            std::fs::read_to_string(&temp).expect("read occupied file"),
+            "do not delete"
+        );
+        assert!(!root.join("workflow.yml.bkp").exists());
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
 
     #[test]
     fn accepts_only_the_expected_scalar_changes() {

@@ -244,6 +244,7 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
                     State::Unpinned
                 },
                 kind: Kind::GitLab,
+                reusable: false,
             });
         }
     }

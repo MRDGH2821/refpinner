@@ -3,7 +3,87 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::reference::Reference;
+use crate::settings::Actions;
 use crate::version;
+
+/// Routes each action to a host-specific API client; all forges share version and edit logic.
+#[derive(Default)]
+pub struct Resolver {
+    remotes: HashMap<String, Remote>,
+}
+
+impl Resolver {
+    pub fn action<'a>(
+        &'a mut self,
+        input: &crate::discover::Input,
+        reference: &Reference,
+        settings: &Actions,
+    ) -> Result<(&'a mut Remote, String), String> {
+        let action = reference
+            .text
+            .rsplit_once('@')
+            .ok_or("reference has no @revision")?
+            .0;
+        let url = if action.contains("://") {
+            action.to_owned()
+        } else {
+            format!(
+                "{}/{}",
+                Actions {
+                    forgejo_instance: settings
+                        .forgejo_instance
+                        .clone()
+                        .or_else(|| input.settings.forgejo_instance.clone()),
+                    forgejo_action_source: settings
+                        .forgejo_action_source
+                        .clone()
+                        .or_else(|| input.settings.forgejo_action_source.clone()),
+                }
+                .source_for(
+                    match input.platform {
+                        crate::config::Platform::Forgejo => ".forgejo",
+                        crate::config::Platform::Gitea => ".gitea",
+                        _ => ".github",
+                    },
+                    reference.reusable
+                )?
+                .trim_end_matches('/'),
+                action
+            )
+        };
+        let uri: ureq::http::Uri = url.parse().map_err(|_| "invalid action source URL")?;
+        if !matches!(uri.scheme_str(), Some("http" | "https"))
+            || uri.authority().is_none_or(|a| a.as_str().contains('@'))
+            || uri.query().is_some()
+            || url.contains('#')
+        {
+            return Err(String::from(
+                "action source must be an HTTP(S) URL without credentials, query, or fragment",
+            ));
+        }
+        let authority = uri.authority().ok_or("action source URL has no host")?;
+        let repo = uri.path().trim_start_matches('/').to_owned();
+        repository(&repo)?;
+        let github = uri
+            .host()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
+        let base = if github {
+            std::env::var(API_URL_VAR).unwrap_or_else(|_| DEFAULT_API_URL.to_owned())
+        } else {
+            format!(
+                "{}://{authority}/api/v1",
+                uri.scheme_str().unwrap_or("https")
+            )
+        };
+        let key = format!("{github}:{base}");
+        let remote = self
+            .remotes
+            .entry(key)
+            .or_insert_with(|| Remote::new(&base, github));
+        Ok((remote, repo))
+    }
+}
 
 /// Environment variable that overrides the GitHub REST API base URL, for GHES or tests.
 const API_URL_VAR: &str = "REFPINNER_GITHUB_API_URL";
@@ -22,26 +102,28 @@ pub struct Resolution {
     pub version: Option<String>,
 }
 
-/// Resolves GitHub action references through the REST API, once per repository and revision.
-pub struct GitHub {
+/// Resolves GitHub and Forgejo refs through one shared engine, once per repository and revision.
+pub struct Remote {
     base: String,
+    github: bool,
     agent: ureq::Agent,
     cache: HashMap<String, Result<Resolution, String>>,
     /// Responses of listing requests, by API path.
     listings: HashMap<String, Result<Option<Value>, String>>,
 }
 
-impl GitHub {
-    /// Uses `REFPINNER_GITHUB_API_URL` when set, otherwise `https://api.github.com`.
-    pub fn from_env() -> Self {
-        let base = std::env::var(API_URL_VAR).unwrap_or_else(|_| DEFAULT_API_URL.to_owned());
+impl Remote {
+    fn new(base: &str, github: bool) -> Self {
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            // Never let an API redirect choose a different scheme or host.
+            .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(30)))
             .build()
             .into();
         Self {
             base: base.trim_end_matches('/').to_owned(),
+            github,
             agent,
             cache: HashMap::new(),
             listings: HashMap::new(),
@@ -69,10 +151,10 @@ impl GitHub {
 
     /// Lists the names of the tags of `action` that start with `prefix`.
     pub fn tags(&mut self, action: &str, prefix: &str) -> Result<Vec<String>, String> {
-        let path = format!(
-            "/repos/{}/git/matching-refs/tags/{}",
-            repository(action)?,
-            encode(prefix)
+        let path = self.refs_path(
+            &repository(action)?,
+            &format!("tags/{}", encode(prefix)),
+            true,
         );
         let refs = self.cached(&path)?.unwrap_or(Value::Null);
         Ok(refs
@@ -108,12 +190,20 @@ impl GitHub {
             return Err(format!("{revision} is not a valid Git ref name"));
         }
         let encoded = encode(revision);
-        if let Some(tag) = self.get(&format!("/repos/{repo}/git/ref/tags/{encoded}"))? {
+        if let Some(tag) = self.exact_ref(
+            repo,
+            &format!("tags/{encoded}"),
+            &format!("refs/tags/{revision}"),
+        )? {
             let commit = self.peel(repo, &tag["object"])?;
             let version = self.exact_version(repo, revision, &commit)?;
             return Ok(Resolution { commit, version });
         }
-        if let Some(branch) = self.get(&format!("/repos/{repo}/git/ref/heads/{encoded}"))? {
+        if let Some(branch) = self.exact_ref(
+            repo,
+            &format!("heads/{encoded}"),
+            &format!("refs/heads/{revision}"),
+        )? {
             let commit = self.peel(repo, &branch["object"])?;
             return Ok(Resolution {
                 commit,
@@ -128,23 +218,20 @@ impl GitHub {
         let Some(track) = version::parse(tag) else {
             return Ok(None);
         };
-        if track.len() >= 3 {
+        if track.core.len() >= 3 || track.is_prerelease() {
             return Ok(Some(tag.to_owned()));
         }
-        let path = format!("/repos/{repo}/git/matching-refs/tags/{}.", encode(tag));
+        let path = self.refs_path(repo, &format!("tags/{}.", encode(tag)), true);
         let refs = self.get(&path)?.unwrap_or(Value::Null);
-        let mut candidates: Vec<(Vec<u64>, &str, &Value)> = refs
+        let mut candidates: Vec<(version::Version, &str, &Value)> = refs
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|entry| {
                 let name = entry["ref"].as_str()?.strip_prefix("refs/tags/")?;
                 let parsed = version::parse(name)?;
-                (parsed.len() > track.len() && parsed.starts_with(&track)).then_some((
-                    parsed,
-                    name,
-                    &entry["object"],
-                ))
+                (parsed.core.len() > track.core.len() && parsed.core.starts_with(&track.core))
+                    .then_some((parsed, name, &entry["object"]))
             })
             .collect();
         // Highest first; a longer version sorts above its own prefix, so `v4.2.0` beats `v4.2`.
@@ -157,6 +244,34 @@ impl GitHub {
         Ok(None)
     }
 
+    fn refs_path(&self, repo: &str, revision: &str, matching: bool) -> String {
+        let endpoint = match (self.github, matching) {
+            (true, true) => "matching-refs",
+            (true, false) => "ref",
+            (false, _) => "refs",
+        };
+        format!("/repos/{repo}/git/{endpoint}/{revision}")
+    }
+
+    /// Forgejo returns prefix matches, even for an exact lookup.
+    fn exact_ref(&self, repo: &str, revision: &str, name: &str) -> Result<Option<Value>, String> {
+        let response = self.get(&self.refs_path(repo, revision, false))?;
+        if self.github {
+            Ok(response)
+        } else {
+            Ok(response.and_then(|body| {
+                body.as_array()?
+                    .iter()
+                    .find(|entry| entry["ref"].as_str() == Some(name))
+                    .cloned()
+            }))
+        }
+    }
+
+    fn service(&self) -> &str {
+        if self.github { "GitHub" } else { "Forgejo" }
+    }
+
     /// Follows annotated tag objects until it reaches a commit.
     fn peel(&self, repo: &str, object: &Value) -> Result<String, String> {
         let mut object = object.clone();
@@ -164,7 +279,12 @@ impl GitHub {
             let sha = object["sha"]
                 .as_str()
                 .filter(|sha| is_commit_id(sha))
-                .ok_or("GitHub returned a reference without a valid object ID")?;
+                .ok_or_else(|| {
+                    format!(
+                        "{} returned a reference without a valid object ID",
+                        self.service()
+                    )
+                })?;
             match object["type"].as_str() {
                 Some("commit") => return Ok(sha.to_owned()),
                 Some("tag") => {
@@ -181,27 +301,73 @@ impl GitHub {
 
     /// Returns the JSON body, or `None` for 404.
     fn get(&self, path: &str) -> Result<Option<Value>, String> {
+        let kind = if self.github {
+            crate::credentials::Service::Github
+        } else {
+            crate::credentials::Service::Forgejo
+        };
+        let host = if self.github {
+            crate::credentials::github_credential_host(&self.base)
+        } else {
+            crate::credentials::host_from_url(&self.base)
+        };
+        let cred = host
+            .as_deref()
+            .and_then(|host| crate::credentials::find(host, kind));
+        if let Some(cred) = &cred {
+            match self.request(path, Some(cred.token.expose())) {
+                Ok(body) => return Ok(body),
+                Err(error) if auth_rejected(&error) => {
+                    if let Some(host) = &host {
+                        crate::credentials::warn_rejected(host, kind);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.request(path, None)
+    }
+
+    fn request(&self, path: &str, token: Option<&str>) -> Result<Option<Value>, String> {
         let url = format!("{}{path}", self.base);
-        let mut response = self
-            .agent
-            .get(&url)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+        let service = self.service();
+        let mut request = self.agent.get(&url).header("Accept", "application/json");
+        if self.github {
+            request = request
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28");
+        }
+        if let Some(token) = token {
+            let kind = if self.github {
+                crate::credentials::Service::Github
+            } else {
+                crate::credentials::Service::Forgejo
+            };
+            request = request.header(
+                "Authorization",
+                crate::credentials::forge_authorization(kind, token),
+            );
+        }
+        let mut response = request
             .call()
-            .map_err(|error| format!("cannot reach GitHub API: {error}"))?;
+            .map_err(|error| format!("cannot reach {service} API: {error}"))?;
         match response.status().as_u16() {
             200 => {}
             404 => return Ok(None),
-            status => return Err(format!("GitHub API returned HTTP {status} for {path}")),
+            status => return Err(format!("{service} API returned HTTP {status} for {path}")),
         }
         let body = response
             .body_mut()
             .read_to_string()
-            .map_err(|error| format!("cannot read GitHub API response: {error}"))?;
+            .map_err(|error| format!("cannot read {service} API response: {error}"))?;
         serde_json::from_str(&body)
             .map(Some)
-            .map_err(|error| format!("invalid GitHub API response for {path}: {error}"))
+            .map_err(|error| format!("invalid {service} API response for {path}: {error}"))
     }
+}
+
+fn auth_rejected(error: &str) -> bool {
+    error.contains("HTTP 401") || error.contains("HTTP 403")
 }
 
 /// Returns `owner/repo` from `owner/repo[/path]`.

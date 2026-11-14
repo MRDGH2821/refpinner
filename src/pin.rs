@@ -5,9 +5,11 @@ use std::process::ExitCode;
 use crate::discover::Scan;
 use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
-use crate::reference::{Reference, State};
-use crate::resolve::{GitHub, Resolution};
-use crate::write;
+use crate::reference::{Kind, Reference, State};
+use crate::registry::Registry;
+use crate::resolve::{Remote, Resolution, Resolver};
+use crate::settings::Actions;
+use crate::{image, lint, write};
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
@@ -28,23 +30,34 @@ pub struct Change {
 ///
 /// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
 /// user picks each pin; otherwise every pin that resolved is applied.
-pub fn run(scan: &Scan, write: bool) -> ExitCode {
-    let mut github = GitHub::from_env();
+pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
+    let mut resolver = Resolver::default();
+    let mut registry = Registry::from_env();
     let mut gitlab = crate::gitlab_resolve::GitLab::from_env();
-    apply(scan, write, State::Unpinned, "pin", |source, reference| {
-        if reference.kind == crate::reference::Kind::GitLab {
-            return crate::gitlab::plan(source, reference, &mut gitlab).map(Some);
-        }
-        let edits = edits(source, reference, &mut github)?;
-        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
-        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
-        let value = format!("{action}@{}", edits[0].text);
-        Ok(Some(Change {
-            summary: String::new(),
-            edits,
-            value,
-        }))
-    })
+    apply(
+        scan,
+        write,
+        State::Unpinned,
+        "pin",
+        |input, source, reference| {
+            if reference.kind == Kind::Image {
+                return image_change(source, reference, &mut registry).map(Some);
+            }
+            if reference.kind == Kind::GitLab {
+                return crate::gitlab::plan(source, reference, &mut gitlab).map(Some);
+            }
+            let (remote, action) = resolver.action(input, reference, settings)?;
+            let edits = edits(source, reference, remote, &action)?;
+            // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
+            let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
+            let value = format!("{action}@{}", edits[0].text);
+            Ok(Some(Change {
+                summary: String::new(),
+                edits,
+                value,
+            }))
+        },
+    )
 }
 
 /// Previews the change `plan` returns for each `target` reference in the files selected by
@@ -57,22 +70,29 @@ pub fn apply(
     write: bool,
     target: State,
     noun: &str,
-    mut plan: impl FnMut(&str, &Reference) -> Result<Option<Change>, String>,
+    mut plan: impl FnMut(&crate::discover::Input, &str, &Reference) -> Result<Option<Change>, String>,
 ) -> ExitCode {
-    let root = &scan.path;
-    let files = match scan.files() {
-        Ok(files) => files,
+    let root = &scan
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| scan.path.clone());
+    let discovery = match scan.files() {
+        Ok(discovery) => discovery,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
+    for skip in &discovery.warnings {
+        println!("{}: warning: {}", skip.path, skip.message);
+    }
     let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
-    for file in files {
-        let shown = display(file.strip_prefix(root).unwrap_or(&file));
-        let parsed = fs::read_to_string(&file)
+    for input in discovery.files {
+        let file = &input.path;
+        let shown = display(file.strip_prefix(root).unwrap_or(file));
+        let parsed = fs::read_to_string(file)
             .map_err(|error| error.to_string())
             .and_then(|source| {
                 let references =
-                    crate::lint::references(&file, &source).map_err(|error| error.to_string())?;
+                    lint::references(input.platform, &source).map_err(|error| error.to_string())?;
                 Ok((source, references))
             });
         let (source, references) = match parsed {
@@ -90,6 +110,9 @@ pub fn apply(
         let mut chosen = Vec::new();
         let mut values = Vec::new();
         for reference in &references {
+            if !input.settings.includes(reference, scan.include_excluded) {
+                continue;
+            }
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
             match reference.state {
                 State::Warning => {
@@ -107,7 +130,7 @@ pub fn apply(
                 }
                 _ => {}
             }
-            match plan(&source, reference) {
+            match plan(&input, &source, reference) {
                 Ok(Some(change)) => {
                     let mut header = format!("{location}: {}", reference.text);
                     if !change.summary.is_empty() {
@@ -136,7 +159,7 @@ pub fn apply(
         if chosen.is_empty() {
             continue;
         }
-        match write::replace(&file, &source, &chosen, &values) {
+        match write::replace(file, &source, &chosen, &values) {
             Ok(backup) => println!(
                 "wrote {shown} (backup {})",
                 display(backup.strip_prefix(root).unwrap_or(&backup))
@@ -165,27 +188,21 @@ fn confirm(noun: &str) -> bool {
 pub fn edits(
     source: &str,
     reference: &Reference,
-    github: &mut GitHub,
+    remote: &mut Remote,
+    action: &str,
 ) -> Result<Vec<Edit>, String> {
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
-    if inner != reference.text {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
+    let quoted = quoted(source, reference)?;
     let after = &source[reference.span.end..line_end(source, reference.span.end)];
     if !(after.trim().is_empty() || after.trim_start().starts_with('#')) {
         return Err(String::from(
             "cannot annotate a reference followed by other content",
         ));
     }
-    let (action, revision) = reference
+    let (_, revision) = reference
         .text
         .rsplit_once('@')
         .ok_or("reference has no @revision")?;
-    let resolution = github.resolve(action, revision)?;
+    let resolution = remote.resolve(action, revision)?;
     let revision_end = reference.span.end - usize::from(quoted);
     Ok(vec![
         Edit {
@@ -199,6 +216,46 @@ pub fn edits(
             text: format!(" # {}", annotation(revision, &resolution)),
         },
     ])
+}
+
+/// Computes the pin of an image `reference` to the digest its tag names now.
+///
+/// The tag stays in the value as the annotation, `name:tag@sha256:...`; an implicit tag is
+/// written out as `:latest`. The value keeps its quoting and any comment.
+fn image_change(
+    source: &str,
+    reference: &Reference,
+    registry: &mut Registry,
+) -> Result<Change, String> {
+    let quoted = quoted(source, reference)?;
+    let name = image::parse(&reference.text)?;
+    let digest = registry.resolve(&name)?;
+    let tag = if name.tag.is_none() { ":latest" } else { "" };
+    let text = format!("{tag}@{digest}");
+    let end = reference.span.end - usize::from(quoted);
+    Ok(Change {
+        summary: String::new(),
+        value: format!("{}{text}", reference.text),
+        edits: vec![Edit {
+            start: end,
+            end,
+            text,
+        }],
+    })
+}
+
+/// Reports whether the value of `reference` is quoted; fails when the source spells it
+/// differently from its text, such as with escapes or line breaks.
+fn quoted(source: &str, reference: &Reference) -> Result<bool, String> {
+    let raw = &source[reference.span.clone()];
+    let quoted = raw.starts_with(['"', '\'']);
+    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
+    if inner != reference.text {
+        return Err(String::from(
+            "cannot edit a reference with escapes or line breaks",
+        ));
+    }
+    Ok(quoted)
 }
 
 /// Records the exact version when known and the source track when it differs.

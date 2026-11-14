@@ -12,6 +12,8 @@ pub struct Reference {
     pub state: State,
     /// Byte range of the value in the source, including any quotes; empty for warnings.
     pub span: Range<usize>,
+    /// Job-level reusable workflows resolve shorthand on the current forge instance.
+    pub reusable: bool,
     /// What the reference names, which selects how it is resolved.
     pub kind: Kind,
 }
@@ -19,8 +21,10 @@ pub struct Reference {
 /// The kind of dependency a [`Reference`] names.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
-    /// A Git-hosted action or reusable workflow.
+    /// A Git-hosted action or reusable workflow, pinned to a commit.
     Action,
+    /// A container image, pinned to a digest.
+    Image,
     /// A GitLab project include.
     GitLab,
 }
