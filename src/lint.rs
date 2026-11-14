@@ -1,10 +1,13 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::discover::Scan;
-use crate::github;
-use crate::reference::State;
+use saphyr::ScanError;
+
+use crate::discover::{self, Scan};
+use crate::reference::{Kind, Reference, State};
+use crate::{github, image};
 
 /// Exit status when every reference is pinned; warnings alone do not change it.
 const OK: u8 = 0;
@@ -31,7 +34,7 @@ pub fn run(scan: &Scan) -> ExitCode {
         let shown = display(file.strip_prefix(root).unwrap_or(&file));
         let parsed = fs::read_to_string(&file)
             .map_err(|error| error.to_string())
-            .and_then(|source| github::references(&source).map_err(|error| error.to_string()));
+            .and_then(|source| references(&file, &source).map_err(|error| error.to_string()));
         let references = match parsed {
             Ok(references) => references,
             Err(error) => {
@@ -56,6 +59,22 @@ pub fn run(scan: &Scan) -> ExitCode {
         }
     }
     ExitCode::from(status)
+}
+
+/// Extracts the references in `source`, read from `file`, with the parser for its platform.
+///
+/// shortcut: Forgejo and Gitea workflows report only images and YAML warnings, because
+/// their action shorthand resolves against the Forgejo instance; the Forgejo ticket (#9)
+/// adds their actions.
+pub fn references(file: &Path, source: &str) -> Result<Vec<Reference>, ScanError> {
+    if file.file_name() == Some(OsStr::new(discover::GITLAB_CI)) {
+        return image::gitlab(source);
+    }
+    let mut references = github::references(source)?;
+    if discover::is_forgejo(file) {
+        references.retain(|r| r.kind == Kind::Image || r.state == State::Warning);
+    }
+    Ok(references)
 }
 
 pub fn fail(message: &str) -> ExitCode {
