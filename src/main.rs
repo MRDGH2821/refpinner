@@ -35,8 +35,20 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Report pinned and unpinned references without network access
-    Lint(discover::Scan),
+    /// Report pinned and unpinned references; with --online, verify pins over the network
+    Lint {
+        /// Verify pins and annotations against forges and registries
+        #[arg(long)]
+        online: bool,
+        /// Emit a JSON report on stdout instead of text lines
+        #[arg(long)]
+        json: bool,
+        /// Treat available updates as lint findings
+        #[arg(long)]
+        fail_on_update: bool,
+        #[command(flatten)]
+        scan: discover::Scan,
+    },
     /// Preview pins for unpinned references; edit files only with --write
     Pin {
         /// Apply the pins, saving each original file to a numbered .bkp backup first
@@ -92,7 +104,20 @@ fn main() -> ExitCode {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => lint::fail(&error.to_string()),
         },
-        Command::Lint(scan) => lint::run(&scan),
+        Command::Lint {
+            online,
+            json,
+            fail_on_update,
+            scan,
+        } => lint::run(
+            &scan,
+            &lint::Options {
+                online,
+                json,
+                fail_on_update,
+            },
+            &cli.actions,
+        ),
         Command::Pin { write, scan } => pin::run(&scan, write, &cli.actions),
         Command::Update { offline: true, .. } => {
             lint::fail("update needs network access and cannot run offline")

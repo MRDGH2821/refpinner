@@ -49,10 +49,22 @@ pub struct Input {
     pub platform: crate::config::Platform,
 }
 
+/// A skipped symlink or backup discovered while selecting files.
+pub struct Skip {
+    pub path: String,
+    pub message: &'static str,
+}
+
+/// Selected CI files and any skip warnings collected while discovering them.
+pub struct Discovery {
+    pub files: Vec<Input>,
+    pub warnings: Vec<Skip>,
+}
+
 impl Scan {
     /// Validates every project's configuration before returning any files to a writer.
-    /// Prints a warning on stdout for skipped symlinks and explicitly supplied backups.
-    pub fn files(&self) -> io::Result<Vec<Input>> {
+    /// Collects skip warnings for symlinks and explicitly supplied backups.
+    pub fn files(&self) -> io::Result<Discovery> {
         let root = self.path.canonicalize()?;
         let mut projects = vec![root.clone()];
         if self.files.is_empty() {
@@ -80,20 +92,25 @@ impl Scan {
                 .map_err(io::Error::other)?;
             configurations.push((project, settings));
         }
+        let mut warnings = Vec::new();
         let mut candidates = if self.files.is_empty() {
-            discover(&root, &[], |file| {
-                let project = project_for(&root, file);
-                let configured = configurations
-                    .iter()
-                    .find(|(path, _)| *path == project)
-                    .and_then(|(_, settings)| settings.no_symlink_warnings);
-                !self.no_symlink_warnings.or(configured).unwrap_or(false)
-            })?
+            discover(
+                &root,
+                &[],
+                |file| {
+                    let project = project_for(&root, file);
+                    let configured = configurations
+                        .iter()
+                        .find(|(path, _)| *path == project)
+                        .and_then(|(_, settings)| settings.no_symlink_warnings);
+                    !self.no_symlink_warnings.or(configured).unwrap_or(false)
+                },
+                &mut warnings,
+            )?
         } else {
-            explicit(&self.files)
-                .into_iter()
-                .map(|file| root.join(file))
-                .collect()
+            let (files, skips) = explicit(&self.files);
+            warnings.extend(skips);
+            files.into_iter().map(|file| root.join(file)).collect()
         };
         if self.files.is_empty() {
             for (project, _) in &configurations {
@@ -141,7 +158,9 @@ impl Scan {
             }
             if self.files.is_empty() {
                 for file in settings.files.as_deref().unwrap_or_default() {
-                    for path in explicit(std::slice::from_ref(&file.path)) {
+                    let (paths, skips) = explicit(std::slice::from_ref(&file.path));
+                    warnings.extend(skips);
+                    for path in paths {
                         let path = path.canonicalize().unwrap_or(path);
                         selected.retain(|input| input.path != path);
                         selected.push(Input {
@@ -163,7 +182,10 @@ impl Scan {
         });
         selected.sort_by(|a, b| a.path.cmp(&b.path));
         selected.dedup_by(|a, b| a.path == b.path);
-        Ok(selected)
+        Ok(Discovery {
+            files: selected,
+            warnings,
+        })
     }
 }
 
@@ -270,6 +292,7 @@ fn discover(
     root: &Path,
     excludes: &[String],
     warn: impl Fn(&Path) -> bool,
+    warnings: &mut Vec<Skip>,
 ) -> io::Result<Vec<PathBuf>> {
     let mut overrides = OverrideBuilder::new(root);
     for glob in excludes {
@@ -301,8 +324,10 @@ fn discover(
         };
         if kind.is_symlink() {
             if recognized && warn(entry.path()) {
-                let shown = display(relative(root, entry.path()));
-                println!("{shown}: warning: skipped symlink");
+                warnings.push(Skip {
+                    path: display(relative(root, entry.path())),
+                    message: "skipped symlink",
+                });
             }
         } else if kind.is_file() && recognized && !matches!(found, Location::Ci) {
             files.push(entry.into_path());
@@ -312,21 +337,28 @@ fn discover(
     Ok(files)
 }
 
-/// Returns the explicitly supplied `files` that are neither symlinks nor backups, and prints a
-/// warning for each skipped file.
-fn explicit(files: &[PathBuf]) -> Vec<PathBuf> {
+/// Returns the explicitly supplied `files` that are neither symlinks nor backups, and skip
+/// warnings for each skipped file.
+fn explicit(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<Skip>) {
     let mut selected = Vec::new();
+    let mut warnings = Vec::new();
     for file in files {
         if file.symlink_metadata().is_ok_and(|meta| meta.is_symlink()) {
-            println!("{}: warning: skipped symlink", display(file));
+            warnings.push(Skip {
+                path: display(file),
+                message: "skipped symlink",
+            });
         } else if is_backup(file) {
-            println!("{}: warning: skipped backup", display(file));
+            warnings.push(Skip {
+                path: display(file),
+                message: "skipped backup",
+            });
         } else {
             selected.push(file.clone());
         }
     }
     selected.sort();
-    selected
+    (selected, warnings)
 }
 
 /// Reports whether the folder holding `file` is a project: it has Git metadata (a `.git`

@@ -52,6 +52,39 @@ pub fn run(
     )
 }
 
+/// Online lint check for one pinned action: `Ok(None)` when current, `Ok(Some(summary))`
+/// when an update is available, or an error that names a mismatch or incomplete check.
+pub(crate) fn verify(
+    source: &str,
+    reference: &Reference,
+    github: &mut Remote,
+    repository: &str,
+) -> Result<Option<String>, Verify> {
+    match plan(
+        source,
+        reference,
+        github,
+        repository,
+        Limit::Major,
+        Releases::Stable,
+        false,
+    ) {
+        Ok(None) => Ok(None),
+        Ok(Some(change)) => Ok(Some(change.summary)),
+        Err(message) if message.contains("moved to") => Err(Verify::Mismatch(message)),
+        Err(message) if message.contains("no annotation") => Ok(None),
+        Err(message) => Err(Verify::Incomplete(message)),
+    }
+}
+
+/// Why an online action check did not succeed as a current pin.
+pub(crate) enum Verify {
+    /// An exact version tag no longer points at the pinned commit.
+    Mismatch(String),
+    /// The forge could not be reached or the check could not finish.
+    Incomplete(String),
+}
+
 /// Computes the update of one pinned reference, or `None` when it is up to date.
 fn plan(
     source: &str,
