@@ -1,0 +1,176 @@
+mod config;
+mod credentials;
+mod discover;
+mod edit;
+mod github;
+mod gitlab;
+mod gitlab_resolve;
+mod image;
+mod lint;
+mod pin;
+mod reference;
+mod registry;
+mod resolve;
+mod settings;
+mod update;
+mod version;
+mod write;
+
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(flatten)]
+    actions: settings::Actions,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Check project configuration without network access
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// List, store or remove host-scoped credentials without revealing tokens
+    Credentials {
+        #[command(subcommand)]
+        command: credentials::CredentialsCommand,
+    },
+    /// Report pinned and unpinned references; with --online, verify pins over the network
+    Lint {
+        /// Verify pins and annotations against forges and registries
+        #[arg(long)]
+        online: bool,
+        /// Emit a JSON report on stdout instead of text lines
+        #[arg(long)]
+        json: bool,
+        /// Treat available updates as lint findings
+        #[arg(long)]
+        fail_on_update: bool,
+        #[command(flatten)]
+        scan: discover::Scan,
+    },
+    /// Preview pins for unpinned references; edit files only with --write
+    Pin {
+        /// Apply the pins, saving each original file to a numbered .bkp backup first
+        #[arg(long)]
+        write: bool,
+        #[command(flatten)]
+        scan: discover::Scan,
+    },
+    /// Preview updates of pinned references within version limits; edit files only with --write
+    #[command(group = clap::ArgGroup::new("limit").args(["major", "minor", "patch"]))]
+    Update {
+        /// Allow updates to a new major version, moving the track with it
+        #[arg(long)]
+        major: bool,
+        /// Stay within the current major version (the default)
+        #[arg(long)]
+        minor: bool,
+        /// Stay within the current minor version
+        #[arg(long)]
+        patch: bool,
+        /// Admit all prereleases as well as stable releases
+        #[arg(long, conflicts_with = "rc")]
+        pre: bool,
+        /// Admit release candidates as well as stable releases
+        #[arg(long)]
+        rc: bool,
+        /// Follow the default branch for pins without an annotation
+        #[arg(long)]
+        follow_default_branch: bool,
+        /// Fail instead of updating, because updates need network access
+        #[arg(long)]
+        offline: bool,
+        /// Apply the updates, saving each original file to a numbered .bkp backup first
+        #[arg(long)]
+        write: bool,
+        #[command(flatten)]
+        scan: discover::Scan,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Validate discovered and inherited TOML files and patterns offline
+    Validate(discover::Scan),
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Config {
+            command: ConfigCommand::Validate(scan),
+        } => match scan.files() {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(error) => lint::fail(&error.to_string()),
+        },
+        Command::Credentials { command } => credentials::run(command),
+        Command::Lint {
+            online,
+            json,
+            fail_on_update,
+            scan,
+        } => lint::run(
+            &scan,
+            &lint::Options {
+                online,
+                json,
+                fail_on_update,
+            },
+            &cli.actions,
+        ),
+        Command::Pin { write, scan } => pin::run(&scan, write, &cli.actions),
+        Command::Update { offline: true, .. } => {
+            lint::fail("update needs network access and cannot run offline")
+        }
+        Command::Update {
+            major,
+            minor,
+            patch,
+            pre,
+            rc,
+            follow_default_branch,
+            write,
+            scan,
+            ..
+        } => {
+            let limit = match (major, minor, patch) {
+                (true, _, _) => Some(version::Limit::Major),
+                (_, true, _) => Some(version::Limit::Minor),
+                (_, _, true) => Some(version::Limit::Patch),
+                _ => match std::env::var("REFPINNER_UPDATE_LIMIT") {
+                    Ok(value) => match <version::Limit as clap::ValueEnum>::from_str(&value, false)
+                    {
+                        Ok(limit) => Some(limit),
+                        Err(_) => {
+                            return lint::fail(
+                                "REFPINNER_UPDATE_LIMIT must be major, minor or patch",
+                            );
+                        }
+                    },
+                    Err(std::env::VarError::NotPresent) => None,
+                    Err(_) => return lint::fail("REFPINNER_UPDATE_LIMIT must be valid Unicode"),
+                },
+            };
+            let releases = match (pre, rc) {
+                (true, _) => version::Releases::Pre,
+                (_, true) => version::Releases::Rc,
+                _ => version::Releases::Stable,
+            };
+            update::run(
+                &scan,
+                write,
+                limit,
+                releases,
+                follow_default_branch,
+                &cli.actions,
+            )
+        }
+    }
+}

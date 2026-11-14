@@ -1,0 +1,11 @@
+---
+description: Setup composite action fixture
+name: Setup
+runs:
+  steps:
+    - uses: actions/setup-node@v4
+    - uses: ./.github/actions/other
+    - uses: $/.github/actions/other
+    - run: echo done
+      shell: bash
+  using: composite

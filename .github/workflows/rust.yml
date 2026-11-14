@@ -1,0 +1,32 @@
+---
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.ref }}-${{ github.workflow }}
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Runner images ship stable Rust; mise-check covers the mise-managed toolchain.
+      - run: cargo test --locked
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+name: Rust
+on: # ryl disable-line rule:truthy
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+  push:
+permissions: {}

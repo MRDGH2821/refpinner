@@ -2,7 +2,6 @@ amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.
 
 import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
 
-
 local sorters = new Group {
   steps {
     ["cspell-sort"] {
@@ -43,7 +42,8 @@ local sorters = new Group {
     }
     ["toml-sort"] {
       check = "toml-sort --check --sort-table-keys --sort-inline-tables {{files}}"
-      exclude = List("**/tombi.toml")
+      // Cargo.toml follows Cargo's conventional key order, enforced by tombi's schema.
+      exclude = List("**/Cargo.toml", "**/tombi.toml")
       fix = "toml-sort --in-place --sort-table-keys --sort-inline-tables {{files}}"
       types = List("toml")
     }
@@ -92,7 +92,6 @@ local misc_linters = new Group {
       exclude = List("template/**", ".config/hk.pkl", ".config/cspell.json")
     }
     ["ls_lint"] = Builtins.ls_lint
-
   }
 }
 
@@ -117,6 +116,20 @@ local style_linters = new Group {
     ["newlines"] = Builtins.newlines
     ["mixed_line_ending"] = Builtins.mixed_line_ending
     ["editorconfig-checker"] = Builtins.editorconfig_checker
+  }
+}
+
+local rust_linters = new Group {
+  steps {
+    // Chained so steps that rewrite sources or share the Cargo target dir never overlap.
+    ["cargo_fmt"] = Builtins.cargo_fmt
+    ["cargo_check"] = (Builtins.cargo_check) { depends = "cargo_fmt" }
+    ["cargo_clippy"] = (Builtins.cargo_clippy) { depends = "cargo_check" }
+    ["cargo_test"] {
+      depends = "cargo_clippy"
+      glob = List("**/*.rs", "**/Cargo.toml", "tests/fixtures/**")
+      check = "cargo test --quiet"
+    }
   }
 }
 
@@ -152,6 +165,7 @@ steps = new Mapping<String, Step | Group> {
   ["text"] = text_linters
   ["misc"] = misc_linters
   ["secrets"] = secret_linters
+  ["rust"] = rust_linters
   ["spell"] = spell_linters
   ["oxfmt"] = (Builtins.oxfmt) { depends = "keep-sorted"; exclusive = true }
 }
@@ -169,4 +183,3 @@ hooks {
     }
   }
 }
-
