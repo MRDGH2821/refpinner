@@ -301,6 +301,34 @@ impl Remote {
 
     /// Returns the JSON body, or `None` for 404.
     fn get(&self, path: &str) -> Result<Option<Value>, String> {
+        let kind = if self.github {
+            crate::credentials::Service::Github
+        } else {
+            crate::credentials::Service::Forgejo
+        };
+        let host = if self.github {
+            crate::credentials::github_credential_host(&self.base)
+        } else {
+            crate::credentials::host_from_url(&self.base)
+        };
+        let cred = host
+            .as_deref()
+            .and_then(|host| crate::credentials::find(host, kind));
+        if let Some(cred) = &cred {
+            match self.request(path, Some(cred.token.expose())) {
+                Ok(body) => return Ok(body),
+                Err(error) if auth_rejected(&error) => {
+                    if let Some(host) = &host {
+                        crate::credentials::warn_rejected(host, kind);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.request(path, None)
+    }
+
+    fn request(&self, path: &str, token: Option<&str>) -> Result<Option<Value>, String> {
         let url = format!("{}{path}", self.base);
         let service = self.service();
         let mut request = self.agent.get(&url).header("Accept", "application/json");
@@ -308,6 +336,17 @@ impl Remote {
             request = request
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28");
+        }
+        if let Some(token) = token {
+            let kind = if self.github {
+                crate::credentials::Service::Github
+            } else {
+                crate::credentials::Service::Forgejo
+            };
+            request = request.header(
+                "Authorization",
+                crate::credentials::forge_authorization(kind, token),
+            );
         }
         let mut response = request
             .call()
@@ -325,6 +364,10 @@ impl Remote {
             .map(Some)
             .map_err(|error| format!("invalid {service} API response for {path}: {error}"))
     }
+}
+
+fn auth_rejected(error: &str) -> bool {
+    error.contains("HTTP 401") || error.contains("HTTP 403")
 }
 
 /// Returns `owner/repo` from `owner/repo[/path]`.
