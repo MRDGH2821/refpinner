@@ -37,8 +37,8 @@ local sorters = new Group {
         """
     }
     ["keep-sorted"] {
-      check = "keep-sorted --mode lint {{files}}"
-      fix = "keep-sorted --mode fix {{files}}"
+      check = "keep-sorted --allow-no-files --mode lint {{files}}"
+      fix = "keep-sorted --allow-no-files --mode fix {{files}}"
     }
     ["toml-sort"] {
       check = "toml-sort --check --sort-table-keys --sort-inline-tables {{files}}"
