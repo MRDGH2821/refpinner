@@ -149,4 +149,4 @@ It supports anonymous Bearer authentication and hashes the manifest bytes when t
 Image pins retain the source tag as `name:tag@sha256:...`, with `latest` for an omitted tag.
 Images and GitHub actions share `pin::apply` for previews, confirmation, and writes.
 `write::replace` checks that only selected YAML values change and saves the original bytes in a numbered backup.
-Image updates and private registry credentials belong to separate issues.
+`refpinner update` advances comparable image tags within the selected limits; private registry credentials belong to a separate issue.
