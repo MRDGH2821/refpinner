@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::version;
+
 /// Environment variable that overrides the GitHub REST API base URL, for GHES or tests.
 const API_URL_VAR: &str = "REFPINNER_GITHUB_API_URL";
 const DEFAULT_API_URL: &str = "https://api.github.com";
@@ -25,6 +27,8 @@ pub struct GitHub {
     base: String,
     agent: ureq::Agent,
     cache: HashMap<String, Result<Resolution, String>>,
+    /// Responses of listing requests, by API path.
+    listings: HashMap<String, Result<Option<Value>, String>>,
 }
 
 impl GitHub {
@@ -40,6 +44,7 @@ impl GitHub {
             base: base.trim_end_matches('/').to_owned(),
             agent,
             cache: HashMap::new(),
+            listings: HashMap::new(),
         }
     }
 
@@ -55,6 +60,46 @@ impl GitHub {
         let resolved = self.lookup(&repo, revision);
         self.cache.insert(key, resolved.clone());
         resolved
+    }
+
+    /// Finds the exact version tag at `commit` for a floating version tag like `v4`.
+    pub fn exact(&self, action: &str, track: &str, commit: &str) -> Result<Option<String>, String> {
+        self.exact_version(&repository(action)?, track, commit)
+    }
+
+    /// Lists the names of the tags of `action` that start with `prefix`.
+    pub fn tags(&mut self, action: &str, prefix: &str) -> Result<Vec<String>, String> {
+        let path = format!(
+            "/repos/{}/git/matching-refs/tags/{}",
+            repository(action)?,
+            encode(prefix)
+        );
+        let refs = self.cached(&path)?.unwrap_or(Value::Null);
+        Ok(refs
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["ref"].as_str()?.strip_prefix("refs/tags/"))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Returns the name of the default branch of `action`'s repository.
+    pub fn default_branch(&mut self, action: &str) -> Result<String, String> {
+        let repo = repository(action)?;
+        self.cached(&format!("/repos/{repo}"))?
+            .and_then(|body| body["default_branch"].as_str().map(str::to_owned))
+            .ok_or_else(|| format!("cannot find the default branch of {repo}"))
+    }
+
+    /// [`Self::get`] once per path and run.
+    fn cached(&mut self, path: &str) -> Result<Option<Value>, String> {
+        if let Some(cached) = self.listings.get(path) {
+            return cached.clone();
+        }
+        let response = self.get(path);
+        self.listings.insert(path.to_owned(), response.clone());
+        response
     }
 
     fn lookup(&self, repo: &str, revision: &str) -> Result<Resolution, String> {
@@ -80,7 +125,7 @@ impl GitHub {
 
     /// Finds the most specific version tag at `commit` for a version tag like `v4` or `v4.2`.
     fn exact_version(&self, repo: &str, tag: &str, commit: &str) -> Result<Option<String>, String> {
-        let Some(track) = version(tag) else {
+        let Some(track) = version::parse(tag) else {
             return Ok(None);
         };
         if track.len() >= 3 {
@@ -94,7 +139,7 @@ impl GitHub {
             .flatten()
             .filter_map(|entry| {
                 let name = entry["ref"].as_str()?.strip_prefix("refs/tags/")?;
-                let parsed = version(name)?;
+                let parsed = version::parse(name)?;
                 (parsed.len() > track.len() && parsed.starts_with(&track)).then_some((
                     parsed,
                     name,
@@ -176,20 +221,6 @@ fn is_name(part: &str) -> bool {
         && part
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-}
-
-/// Parses `v1`, `1.2` or `v1.2.3` into numeric components; anything else is not a version.
-fn version(tag: &str) -> Option<Vec<u64>> {
-    tag.strip_prefix('v')
-        .unwrap_or(tag)
-        .split('.')
-        .map(|part| {
-            if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            part.parse().ok()
-        })
-        .collect()
 }
 
 fn is_commit_id(sha: &str) -> bool {

@@ -61,6 +61,7 @@
     "pyproject",
     "pytest",
     "rfind",
+    "rignore",
     "rsplit",
     "rumdl",
     "rustls",

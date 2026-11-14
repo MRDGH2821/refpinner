@@ -14,3 +14,6 @@ indent_size = unset
 
 [*.py]
 indent_size = 4
+
+[LICENSE]
+indent_size = unset

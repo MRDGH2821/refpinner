@@ -15,18 +15,56 @@ const OK: u8 = 0;
 /// Exit status when a file or reference could not be processed.
 const ERROR: u8 = 2;
 
+/// A previewed edit of one reference.
+pub struct Change {
+    /// What changes, shown after the reference in the preview; empty for a pin.
+    pub summary: String,
+    /// Edits of the file's original text.
+    pub edits: Vec<Edit>,
+    /// The reference's new value, which the write checks the edited file holds.
+    pub value: String,
+}
+
 /// Previews pins for the unpinned references in the files selected by `scan`.
 ///
 /// With `write`, each file's pins are applied with a backup. When stdin is a terminal the
 /// user picks each pin; otherwise every pin that resolved is applied.
 pub fn run(scan: &Scan, write: bool) -> ExitCode {
+    let mut github = GitHub::from_env();
+    let mut registry = Registry::from_env();
+    apply(scan, write, State::Unpinned, "pin", |source, reference| {
+        if reference.kind == Kind::Image {
+            return image_change(source, reference, &mut registry).map(Some);
+        }
+        let edits = edits(source, reference, &mut github)?;
+        // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
+        let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
+        let value = format!("{action}@{}", edits[0].text);
+        Ok(Some(Change {
+            summary: String::new(),
+            edits,
+            value,
+        }))
+    })
+}
+
+/// Previews the change `plan` returns for each `target` reference in the files selected by
+/// `scan`; `None` means the reference needs no change.
+///
+/// With `write`, each file's changes are applied with a backup. When stdin is a terminal the
+/// user picks each `noun`; otherwise every change that resolved is applied.
+pub fn apply(
+    scan: &Scan,
+    write: bool,
+    target: State,
+    noun: &str,
+    mut plan: impl FnMut(&str, &Reference) -> Result<Option<Change>, String>,
+) -> ExitCode {
     let root = &scan.path;
     let files = match scan.files() {
         Ok(files) => files,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
-    let mut github = GitHub::from_env();
-    let mut registry = Registry::from_env();
     let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
     for file in files {
@@ -55,12 +93,12 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
         for reference in &references {
             let location = format!("{shown}:{}:{}", reference.line, reference.column);
             match reference.state {
-                State::Pinned => continue,
                 State::Warning => {
                     println!("{location}: warning {}", reference.text);
                     continue;
                 }
-                State::Unpinned if aliased => {
+                state if state != target => continue,
+                _ if aliased => {
                     eprintln!(
                         "refpinner: {location}: {}: not edited because the file uses YAML anchors or aliases",
                         reference.text
@@ -68,28 +106,21 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
                     status = ERROR;
                     continue;
                 }
-                State::Unpinned => {}
+                _ => {}
             }
-            let result = match reference.kind {
-                Kind::Action => edits(&source, reference, &mut github),
-                Kind::Image => image_edits(&source, reference, &mut registry),
-            };
-            match result {
-                Ok(edits) => {
-                    preview(&location, &source, reference, &edits);
-                    if write && (!interactive || confirm()) {
-                        let pinned = match reference.kind {
-                            // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
-                            Kind::Action => {
-                                let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
-                                format!("{action}@{}", edits[0].text)
-                            }
-                            Kind::Image => format!("{}{}", reference.text, edits[0].text),
-                        };
-                        values.push((reference.line, reference.column, pinned));
-                        chosen.extend(edits);
+            match plan(&source, reference) {
+                Ok(Some(change)) => {
+                    let mut header = format!("{location}: {}", reference.text);
+                    if !change.summary.is_empty() {
+                        header = format!("{header}: {}", change.summary);
+                    }
+                    preview(&header, &source, reference, &change.edits);
+                    if write && (!interactive || confirm(noun)) {
+                        values.push((reference.line, reference.column, change.value));
+                        chosen.extend(change.edits);
                     }
                 }
+                Ok(None) => {}
                 Err(error) => {
                     eprintln!("refpinner: {location}: {}: {error}", reference.text);
                     status = ERROR;
@@ -113,41 +144,13 @@ pub fn run(scan: &Scan, write: bool) -> ExitCode {
     ExitCode::from(status)
 }
 
-/// Asks whether to apply the pin just previewed; anything but `y` or `yes` declines.
-fn confirm() -> bool {
-    eprint!("apply this pin? [y/N] ");
+/// Asks whether to apply the `noun` just previewed; anything but `y` or `yes` declines.
+fn confirm(noun: &str) -> bool {
+    eprint!("apply this {noun}? [y/N] ");
     let _ = io::stderr().flush();
     let mut answer = String::new();
     io::stdin().lock().read_line(&mut answer).is_ok()
         && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
-/// Computes the edit that pins an image `reference` to the digest its tag names now.
-///
-/// The tag stays in the value as the annotation, `name:tag@sha256:...`; an implicit tag is
-/// written out as `:latest`. The value keeps its quoting and any comment.
-pub fn image_edits(
-    source: &str,
-    reference: &Reference,
-    registry: &mut Registry,
-) -> Result<Vec<Edit>, String> {
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
-    if inner != reference.text {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
-    let name = image::parse(&reference.text)?;
-    let digest = registry.resolve(&name)?;
-    let tag = if name.tag.is_none() { ":latest" } else { "" };
-    let end = reference.span.end - usize::from(quoted);
-    Ok(vec![Edit {
-        start: end,
-        end,
-        text: format!("{tag}@{digest}"),
-    }])
 }
 
 /// Computes the edits that pin `reference` to the commit its revision names now.
@@ -158,14 +161,7 @@ pub fn edits(
     reference: &Reference,
     github: &mut GitHub,
 ) -> Result<Vec<Edit>, String> {
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
-    if inner != reference.text {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
+    let quoted = quoted(source, reference)?;
     let after = &source[reference.span.end..line_end(source, reference.span.end)];
     if !(after.trim().is_empty() || after.trim_start().starts_with('#')) {
         return Err(String::from(
@@ -192,6 +188,46 @@ pub fn edits(
     ])
 }
 
+/// Computes the pin of an image `reference` to the digest its tag names now.
+///
+/// The tag stays in the value as the annotation, `name:tag@sha256:...`; an implicit tag is
+/// written out as `:latest`. The value keeps its quoting and any comment.
+fn image_change(
+    source: &str,
+    reference: &Reference,
+    registry: &mut Registry,
+) -> Result<Change, String> {
+    let quoted = quoted(source, reference)?;
+    let name = image::parse(&reference.text)?;
+    let digest = registry.resolve(&name)?;
+    let tag = if name.tag.is_none() { ":latest" } else { "" };
+    let text = format!("{tag}@{digest}");
+    let end = reference.span.end - usize::from(quoted);
+    Ok(Change {
+        summary: String::new(),
+        value: format!("{}{text}", reference.text),
+        edits: vec![Edit {
+            start: end,
+            end,
+            text,
+        }],
+    })
+}
+
+/// Reports whether the value of `reference` is quoted; fails when the source spells it
+/// differently from its text, such as with escapes or line breaks.
+fn quoted(source: &str, reference: &Reference) -> Result<bool, String> {
+    let raw = &source[reference.span.clone()];
+    let quoted = raw.starts_with(['"', '\'']);
+    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
+    if inner != reference.text {
+        return Err(String::from(
+            "cannot edit a reference with escapes or line breaks",
+        ));
+    }
+    Ok(quoted)
+}
+
 /// Records the exact version when known and the source track when it differs.
 fn annotation(revision: &str, resolution: &Resolution) -> String {
     match &resolution.version {
@@ -201,8 +237,8 @@ fn annotation(revision: &str, resolution: &Resolution) -> String {
     }
 }
 
-/// Prints the reference location and its line before and after the edits.
-fn preview(location: &str, source: &str, reference: &Reference, edits: &[Edit]) {
+/// Prints `header` and the reference's line before and after the edits.
+fn preview(header: &str, source: &str, reference: &Reference, edits: &[Edit]) {
     let start = source[..reference.span.start]
         .rfind('\n')
         .map_or(0, |newline| newline + 1);
@@ -216,13 +252,13 @@ fn preview(location: &str, source: &str, reference: &Reference, edits: &[Edit]) 
         })
         .collect();
     let line = &source[start..end];
-    println!("{location}: {}", reference.text);
+    println!("{header}");
     println!("-{line}");
     println!("+{}", edit::apply(line, &shifted));
 }
 
 /// Byte offset of the end of the line holding `offset`, before any `\r\n` or `\n`.
-fn line_end(source: &str, offset: usize) -> usize {
+pub fn line_end(source: &str, offset: usize) -> usize {
     let end = source[offset..]
         .find('\n')
         .map_or(source.len(), |newline| offset + newline);
