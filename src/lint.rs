@@ -31,7 +31,7 @@ pub fn run(scan: &Scan) -> ExitCode {
         let shown = display(file.strip_prefix(root).unwrap_or(&file));
         let parsed = fs::read_to_string(&file)
             .map_err(|error| error.to_string())
-            .and_then(|source| github::references(&source).map_err(|error| error.to_string()));
+            .and_then(|source| references(&file, &source).map_err(|error| error.to_string()));
         let references = match parsed {
             Ok(references) => references,
             Err(error) => {
@@ -56,6 +56,21 @@ pub fn run(scan: &Scan) -> ExitCode {
         }
     }
     ExitCode::from(status)
+}
+
+/// Selects the parser for a recognized CI file.
+pub fn references(
+    path: &Path,
+    source: &str,
+) -> Result<Vec<crate::reference::Reference>, saphyr::ScanError> {
+    if path
+        .file_name()
+        .is_some_and(|name| name == ".gitlab-ci.yml")
+    {
+        crate::gitlab::references(source)
+    } else {
+        github::references(source)
+    }
 }
 
 pub fn fail(message: &str) -> ExitCode {

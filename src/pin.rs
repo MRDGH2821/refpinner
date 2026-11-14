@@ -7,7 +7,7 @@ use crate::edit::{self, Edit};
 use crate::lint::{display, fail};
 use crate::reference::{Reference, State};
 use crate::resolve::{GitHub, Resolution};
-use crate::{github, write};
+use crate::write;
 
 /// Exit status when every reference resolved.
 const OK: u8 = 0;
@@ -30,7 +30,11 @@ pub struct Change {
 /// user picks each pin; otherwise every pin that resolved is applied.
 pub fn run(scan: &Scan, write: bool) -> ExitCode {
     let mut github = GitHub::from_env();
+    let mut gitlab = crate::gitlab_resolve::GitLab::from_env();
     apply(scan, write, State::Unpinned, "pin", |source, reference| {
+        if reference.kind == crate::reference::Kind::GitLab {
+            return crate::gitlab::plan(source, reference, &mut gitlab).map(Some);
+        }
         let edits = edits(source, reference, &mut github)?;
         // `edits` succeeded, so the text has an `@` and edit 0 is the commit.
         let action = reference.text.rsplit_once('@').map_or("", |(a, _)| a);
@@ -67,7 +71,8 @@ pub fn apply(
         let parsed = fs::read_to_string(&file)
             .map_err(|error| error.to_string())
             .and_then(|source| {
-                let references = github::references(&source).map_err(|error| error.to_string())?;
+                let references =
+                    crate::lint::references(&file, &source).map_err(|error| error.to_string())?;
                 Ok((source, references))
             });
         let (source, references) = match parsed {
@@ -110,7 +115,14 @@ pub fn apply(
                     }
                     preview(&header, &source, reference, &change.edits);
                     if write && (!interactive || confirm(noun)) {
-                        values.push((reference.line, reference.column, change.value));
+                        let value = if reference.kind == crate::reference::Kind::GitLab
+                            && !reference.text.contains('@')
+                        {
+                            write::Value::GitLabRef(reference.line, reference.column, change.value)
+                        } else {
+                            write::Value::Scalar(reference.line, reference.column, change.value)
+                        };
+                        values.push(value);
                         chosen.extend(change.edits);
                     }
                 }

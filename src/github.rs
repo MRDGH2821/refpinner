@@ -81,6 +81,7 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
                         State::Unpinned
                     },
                     span: value_span(source, byte_offset(source, uses.span.start.index()), text),
+                    kind: crate::reference::Kind::Action,
                 });
             }
         }
@@ -89,18 +90,19 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
     Ok(references)
 }
 
-fn warning(at: Marker, text: String) -> Reference {
+pub fn warning(at: Marker, text: String) -> Reference {
     Reference {
         line: at.line(),
         column: at.col() + 1,
         text,
         state: State::Warning,
         span: 0..0,
+        kind: crate::reference::Kind::Action,
     }
 }
 
 /// Converts saphyr's character index into a byte offset into `source`.
-fn byte_offset(source: &str, chars: usize) -> usize {
+pub fn byte_offset(source: &str, chars: usize) -> usize {
     source
         .char_indices()
         .nth(chars)
@@ -112,7 +114,7 @@ fn byte_offset(source: &str, chars: usize) -> usize {
 /// saphyr's end marker can run past a quoted scalar into its trailing comment, so the end
 /// comes from the text instead. Returns an empty range when the source spells `text`
 /// differently, such as with escapes or line folding.
-fn value_span(source: &str, start: usize, text: &str) -> Range<usize> {
+pub fn value_span(source: &str, start: usize, text: &str) -> Range<usize> {
     let rest = &source[start..];
     let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''));
     let length = match quote {

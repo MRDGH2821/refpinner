@@ -19,6 +19,9 @@ pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) 
     let mut github = GitHub::from_env();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
     pin::apply(scan, write, State::Pinned, "update", |source, reference| {
+        if reference.kind != crate::reference::Kind::Action {
+            return Ok(None);
+        }
         plan(source, reference, &mut github, limit, follow)
     })
 }

@@ -1,4 +1,5 @@
 ---
+description: Root composite action fixture
 name: Root action
 runs:
   steps:

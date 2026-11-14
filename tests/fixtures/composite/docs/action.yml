@@ -1,4 +1,5 @@
 ---
+description: Unrecognized composite action fixture
 name: Not in a recognized location
 runs:
   steps:

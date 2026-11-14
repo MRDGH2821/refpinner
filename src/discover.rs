@@ -145,6 +145,9 @@ fn location(relative: &Path) -> Option<Location> {
         relative.file_name().and_then(OsStr::to_str),
         Some("action.yml" | "action.yaml")
     );
+    if relative.file_name() == Some(OsStr::new(".gitlab-ci.yml")) && depth <= PROJECT_DEPTH + 1 {
+        return Some(Location::CiFile);
+    }
     let Some(ci) = parts.iter().position(|part| *part == ".github") else {
         return match depth {
             1 if action => Some(Location::CiFile),
