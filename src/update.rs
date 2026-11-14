@@ -1,4 +1,3 @@
-use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 use crate::config::Settings;
@@ -16,10 +15,9 @@ use crate::version::{self, Limit, Releases};
 ///
 /// Each pin follows its annotation: an exact version moves to the highest version tag that
 /// `limit` allows, and a branch or floating tag moves to the commit it names now. An
-/// unannotated pin follows the default branch only with `follow_default_branch`, or after
-/// the user confirms the previewed update in an interactive write. With `write`, updates are
-/// applied as `pin --write` applies pins. Pinned images follow the same limits using their
-/// inline tags.
+/// unannotated pin follows the default branch only with `follow_default_branch`. With
+/// `write`, updates are applied as `pin --write` applies pins. Pinned images follow the same
+/// limits using their inline tags.
 pub fn run(
     scan: &Scan,
     write: bool,
@@ -30,8 +28,6 @@ pub fn run(
 ) -> ExitCode {
     let mut resolver = Resolver::default();
     let mut registry = Registry::from_env();
-    let follow = follow_default_branch || (write && io::stdin().is_terminal());
-    let interactive = write && io::stdin().is_terminal();
     pin::apply(
         scan,
         write,
@@ -49,14 +45,21 @@ pub fn run(
                     &input.settings,
                     bound,
                     releases,
-                    interactive,
                 );
             }
             if reference.kind != Kind::Action {
                 return Ok(None);
             }
             let (remote, action) = resolver.action(input, reference, settings)?;
-            plan(source, reference, remote, &action, bound, releases, follow)
+            plan(
+                source,
+                reference,
+                remote,
+                &action,
+                bound,
+                releases,
+                follow_default_branch,
+            )
         },
     )
 }
@@ -69,7 +72,6 @@ fn image_plan(
     settings: &Settings,
     limit: Limit,
     releases: Releases,
-    interactive: bool,
 ) -> Result<Option<Change>, String> {
     let raw = &source[reference.span.clone()];
     let quoted = raw.starts_with(['"', '\'']);
@@ -109,8 +111,7 @@ fn image_plan(
         return Ok(None);
     }
     let tags = registry.tags(&name)?;
-    let Some(chosen) = select_image_tag(&tag, &tags, settings, left, limit, releases, interactive)?
-    else {
+    let Some(chosen) = select_image_tag(&tag, &tags, settings, left, limit, releases)? else {
         return Ok(None);
     };
     if chosen == tag {
@@ -142,7 +143,7 @@ fn image_plan(
     }))
 }
 
-/// Picks the highest eligible existing tag, or reports ambiguity for unattended runs.
+/// Picks the highest eligible same-component tag, or reports cross-component ambiguity.
 fn select_image_tag(
     current: &str,
     tags: &[String],
@@ -150,7 +151,6 @@ fn select_image_tag(
     reference: &str,
     limit: Limit,
     releases: Releases,
-    interactive: bool,
 ) -> Result<Option<String>, String> {
     let Some(current_parts) = image::tag_parts(current, settings, reference) else {
         // Non-comparable tags stay pinned; digest movement is handled above.
@@ -196,12 +196,10 @@ fn select_image_tag(
     if let Some((_, tag)) = best_same {
         return Ok(Some(tag));
     }
-    if let Some((_, tag)) = best_cross {
-        if interactive {
-            return Ok(Some(tag));
-        }
+    if best_cross.is_some() {
+        // shortcut: no compound-component picker yet; require a version rule or concrete pin.
         return Err(format!(
-            "ambiguous compound update from {current}; select a tag interactively or with a version rule"
+            "ambiguous compound update from {current}; configure a version rule or pin a concrete tag"
         ));
     }
     Ok(None)
