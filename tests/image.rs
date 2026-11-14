@@ -267,6 +267,45 @@ fn images() -> Vec<Route> {
 }
 
 #[test]
+fn gitlab_include_and_image_share_one_safe_write() {
+    let source =
+        "include:\n  - project: group/project\n    ref: main\n    file: /ci.yml\nimage: node:18\n";
+    let root = project("gitlab-mixed", &[(".gitlab-ci.yml", source)]);
+    let mut routes = images();
+    routes.push((
+        "GET /projects/group%2Fproject/repository/commits/main?stats=false",
+        200,
+        Vec::new(),
+        r#"{"id":"1111111111111111111111111111111111111111"}"#,
+    ));
+    let registry = Registry::new(routes);
+    let output = Command::new(env!("CARGO_BIN_EXE_refpinner"))
+        .current_dir(&root)
+        .args(["pin", "--write"])
+        .env("REFPINNER_REGISTRY_URL", &registry.url)
+        .env("REFPINNER_GITLAB_API_URL", &registry.url)
+        .env_remove("HTTP_PROXY")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("ALL_PROXY")
+        .output()
+        .expect("run refpinner");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = std::fs::read_to_string(root.join(".gitlab-ci.yml")).expect("read file");
+    assert!(
+        result.contains("ref: 1111111111111111111111111111111111111111 # main"),
+        "{result}"
+    );
+    assert!(
+        result.contains(&format!("image: node:18@{NODE}")),
+        "{result}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml.bkp")).unwrap(),
+        source
+    );
+}
+
+#[test]
 fn preview_pins_images_to_index_digests_keeping_tags_and_leaves_files_unchanged() {
     let workflow = concat!(
         "jobs:\n",

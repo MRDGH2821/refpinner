@@ -8,7 +8,12 @@ use crate::edit::{self, Edit};
 
 /// A scalar the edits must change: its 1-based line and column in the original, and the
 /// value it must hold afterwards.
-pub type Value = (usize, usize, String);
+pub enum Value {
+    /// Replace one scalar without changing its style or surrounding structure.
+    Scalar(usize, usize, String),
+    /// Add a plain ref key/value immediately after an existing GitLab project value.
+    GitLabRef(usize, usize, String),
+}
 
 /// Applies `edits` to `original`, the text read from `path`, and replaces the file.
 ///
@@ -100,19 +105,42 @@ pub fn validate(original: &str, replacement: &str, values: &[Value]) -> Result<(
         .collect::<Result<_, _>>()
         .map_err(invalid)?;
     let changed = || String::from("edits changed more than the references");
-    if before.len() != after.len() {
-        return Err(changed());
-    }
+    let mut after = after.iter();
     let mut matched = 0;
-    for ((old, span), (new, _)) in before.iter().zip(&after) {
-        let expected = values.iter().find(|(line, column, _)| {
+    for (index, (old, span)) in before.iter().enumerate() {
+        let Some((new, _)) = after.next() else {
+            return Err(changed());
+        };
+        let expected = values.iter().find(|value| {
+            let (line, column) = match value {
+                Value::Scalar(line, column, _) | Value::GitLabRef(line, column, _) => {
+                    (line, column)
+                }
+            };
             (*line, *column) == (span.start.line(), span.start.col() + 1)
         });
+        if let Some(Value::GitLabRef(_, _, commit)) = expected {
+            use saphyr_parser::ScalarStyle::Plain;
+            let project_key = matches!(before.get(index.wrapping_sub(1)), Some((Event::Scalar(key, _, 0, None), _)) if key == "project");
+            if !project_key || old != new || !matches!(old, Event::Scalar(_, _, 0, None)) {
+                return Err(changed());
+            }
+            match (after.next(), after.next()) {
+                (
+                    Some((Event::Scalar(key, Plain, 0, None), _)),
+                    Some((Event::Scalar(value, Plain, 0, None), _)),
+                ) if key == "ref" && value == commit => {
+                    matched += 1;
+                    continue;
+                }
+                _ => return Err(changed()),
+            }
+        }
         match (old, new, expected) {
             (
                 Event::Scalar(_, style, anchor, tag),
                 Event::Scalar(value, new_style, new_anchor, new_tag),
-                Some((.., expected)),
+                Some(Value::Scalar(_, _, expected)),
             ) if value == expected && (style, anchor, tag) == (new_style, new_anchor, new_tag) => {
                 matched += 1;
             }
@@ -120,7 +148,7 @@ pub fn validate(original: &str, replacement: &str, values: &[Value]) -> Result<(
             _ => return Err(changed()),
         }
     }
-    if matched == values.len() {
+    if matched == values.len() && after.next().is_none() {
         Ok(())
     } else {
         Err(changed())
@@ -129,7 +157,7 @@ pub fn validate(original: &str, replacement: &str, values: &[Value]) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{replace, sibling, validate};
+    use super::{Value, replace, sibling, validate};
     use crate::edit::Edit;
 
     #[test]
@@ -147,7 +175,12 @@ mod tests {
             end: 7,
             text: String::from("x@ab"),
         }];
-        let result = replace(&file, original, &edits, &[(1, 4, String::from("x@ab"))]);
+        let result = replace(
+            &file,
+            original,
+            &edits,
+            &[Value::Scalar(1, 4, String::from("x@ab"))],
+        );
         assert!(result.is_err());
         assert_eq!(
             std::fs::read_to_string(&file).expect("read original"),
@@ -164,7 +197,7 @@ mod tests {
     #[test]
     fn accepts_only_the_expected_scalar_changes() {
         let original = "a: x@v1 # c\nb: y\n";
-        let values = [(1, 4, String::from("x@abc"))];
+        let values = [Value::Scalar(1, 4, String::from("x@abc"))];
         assert_eq!(
             validate(original, "a: x@abc # v1 # c\nb: y\n", &values),
             Ok(())

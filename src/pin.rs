@@ -34,6 +34,7 @@ pub struct Change {
 pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
     let mut resolver = Resolver::default();
     let mut registry = Registry::from_env();
+    let mut gitlab = crate::gitlab_resolve::GitLab::from_env();
     apply(
         scan,
         write,
@@ -42,6 +43,9 @@ pub fn run(scan: &Scan, write: bool, settings: &Actions) -> ExitCode {
         |file, source, reference| {
             if reference.kind == Kind::Image {
                 return image_change(source, reference, &mut registry).map(Some);
+            }
+            if reference.kind == Kind::GitLab {
+                return crate::gitlab::plan(source, reference, &mut gitlab).map(Some);
             }
             let (remote, action) = resolver.action(file, reference, settings)?;
             let edits = edits(source, reference, remote, &action)?;
@@ -125,7 +129,14 @@ pub fn apply(
                     }
                     preview(&header, &source, reference, &change.edits);
                     if write && (!interactive || confirm(noun)) {
-                        values.push((reference.line, reference.column, change.value));
+                        let value = if reference.kind == crate::reference::Kind::GitLab
+                            && !reference.text.contains('@')
+                        {
+                            write::Value::GitLabRef(reference.line, reference.column, change.value)
+                        } else {
+                            write::Value::Scalar(reference.line, reference.column, change.value)
+                        };
+                        values.push(value);
                         chosen.extend(change.edits);
                     }
                 }

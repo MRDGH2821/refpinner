@@ -33,7 +33,7 @@ pub fn run(
         "update",
         |file, source, reference| {
             // shortcut: image updates are handled by ticket #12.
-            if reference.kind == Kind::Image {
+            if reference.kind != Kind::Action {
                 return Ok(None);
             }
             let (remote, action) = resolver.action(file, reference, settings)?;

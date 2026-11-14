@@ -53,7 +53,8 @@ fn refpinner(dir: &Path, forge: &Forge, args: &[&str]) -> Output {
     command
         .args(args)
         .current_dir(dir)
-        .env("REFPINNER_GITHUB_API_URL", &forge.url);
+        .env("REFPINNER_GITHUB_API_URL", &forge.url)
+        .env("REFPINNER_GITLAB_API_URL", &forge.url);
     for proxy in [
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -73,6 +74,118 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn gitlab_selected_ref_preview_and_write_preserve_source_and_track() {
+    let ci = concat!(
+        "# café\r\n",
+        "include:\r\n",
+        "  - project: 'group/sub/project'\r\n",
+        "    ref: \"release/v1\" # keep me\r\n",
+        "    file: ['/a.yml', '/b.yml']\r\n",
+    );
+    let root = project("gitlab-selected", &[(".gitlab-ci.yml", ci)]);
+    let forge = Forge::new(&[(
+        "/projects/group%2Fsub%2Fproject/repository/commits/release%2Fv1?stats=false",
+        200,
+        r#"{"id":"1111111111111111111111111111111111111111"}"#,
+    )]);
+    let expected = ci.replace(
+        "\"release/v1\"",
+        "\"1111111111111111111111111111111111111111\" # release/v1",
+    );
+
+    let preview = pin(&root, &forge);
+    assert_eq!(stderr(&preview), "");
+    assert_eq!(preview.status.code(), Some(0));
+    assert!(
+        stdout(&preview).contains(
+            "+    ref: \"1111111111111111111111111111111111111111\" # release/v1 # keep me"
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+        ci
+    );
+    assert!(!root.join(".gitlab-ci.yml.bkp").exists());
+
+    let written = refpinner(&root, &forge, &["pin", "--write"]);
+    assert_eq!(stderr(&written), "");
+    assert_eq!(written.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+        expected
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml.bkp")).unwrap(),
+        ci
+    );
+    let repeated = refpinner(&root, &forge, &["pin", "--write"]);
+    assert_eq!(repeated.status.code(), Some(0));
+    assert_eq!(stdout(&repeated), "");
+    assert_eq!(forge.total(), 2);
+}
+
+#[test]
+fn gitlab_missing_refs_use_default_branch_and_validate_insertions() {
+    for (name, ci, expected) in [
+        (
+            "block",
+            "include:\n  - project: group/project # keep\n    file: /a.yml\n",
+            "include:\n  - project: group/project # keep\n    ref: 1111111111111111111111111111111111111111 # main\n    file: /a.yml\n",
+        ),
+        (
+            "single-crlf",
+            "include:\r\n    project: group/project\r\n    file: /a.yml",
+            "include:\r\n    project: group/project\r\n    ref: 1111111111111111111111111111111111111111 # main\r\n    file: /a.yml",
+        ),
+        (
+            "flow",
+            "include: {project: group/project, file: /a.yml}\n",
+            "include: {project: group/project, ref: 1111111111111111111111111111111111111111 # main\n          , file: /a.yml}\n",
+        ),
+    ] {
+        let root = project(&format!("gitlab-default-{name}"), &[(".gitlab-ci.yml", ci)]);
+        let forge = Forge::new(&[
+            (
+                "/projects/group%2Fproject",
+                200,
+                r#"{"default_branch":"main"}"#,
+            ),
+            (
+                "/projects/group%2Fproject/repository/commits/main?stats=false",
+                200,
+                r#"{"id":"1111111111111111111111111111111111111111"}"#,
+            ),
+        ]);
+        let preview = pin(&root, &forge);
+        assert_eq!(stderr(&preview), "", "{name}");
+        assert_eq!(preview.status.code(), Some(0), "{name}");
+        assert!(stdout(&preview).contains("# main"), "{name}");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+            ci
+        );
+        let output = refpinner(&root, &forge, &["pin", "--write"]);
+        assert_eq!(stderr(&output), "", "{name}");
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".gitlab-ci.yml")).unwrap(),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".gitlab-ci.yml.bkp")).unwrap(),
+            ci
+        );
+        let lint = refpinner(&root, &forge, &["lint"]);
+        assert_eq!(lint.status.code(), Some(0), "{name}: {}", stderr(&lint));
+        assert!(
+            stdout(&lint).contains("pinned group/project@1111111111111111111111111111111111111111")
+        );
+        assert_eq!(forge.total(), 4);
+    }
 }
 
 #[test]

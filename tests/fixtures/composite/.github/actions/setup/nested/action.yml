@@ -1,4 +1,5 @@
 ---
+description: Nested composite action fixture
 name: Nested
 runs:
   steps:

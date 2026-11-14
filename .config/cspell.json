@@ -40,6 +40,8 @@
     "dotenv",
     "esac",
     "forgejo",
+    "Fproject",
+    "Fsub",
     "GHES",
     "gitea",
     "glab",

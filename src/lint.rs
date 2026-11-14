@@ -61,11 +61,17 @@ pub fn run(scan: &Scan) -> ExitCode {
     ExitCode::from(status)
 }
 
-/// Extracts the references in `source`, read from `file`, with the parser for its platform.
-///
+/// Extracts references using the file's platform.
 pub fn references(file: &Path, source: &str) -> Result<Vec<Reference>, ScanError> {
     if file.file_name() == Some(OsStr::new(discover::GITLAB_CI)) {
-        return image::gitlab(source);
+        let mut references = image::gitlab(source)?;
+        references.extend(
+            crate::gitlab::references(source)?
+                .into_iter()
+                .filter(|r| !r.text.starts_with("unsupported YAML ")),
+        );
+        references.sort_by_key(|r| (r.line, r.column));
+        return Ok(references);
     }
     github::references(source)
 }

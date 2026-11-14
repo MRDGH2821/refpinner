@@ -25,6 +25,8 @@ pub enum Kind {
     Action,
     /// A container image, pinned to a digest.
     Image,
+    /// A GitLab project include.
+    GitLab,
 }
 
 /// Lint classification of a [`Reference`].

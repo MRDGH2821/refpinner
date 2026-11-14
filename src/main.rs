@@ -1,6 +1,8 @@
 mod discover;
 mod edit;
 mod github;
+mod gitlab;
+mod gitlab_resolve;
 mod image;
 mod lint;
 mod pin;

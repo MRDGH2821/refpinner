@@ -139,9 +139,9 @@ fn composite_actions_in_recognized_locations_are_reported() {
     assert_eq!(
         stdout(&output),
         concat!(
-            ".github/actions/setup/action.yaml:5:13: unpinned actions/setup-node@v4\n",
-            ".github/actions/setup/nested/action.yml:5:13: unpinned owner/repo/path@main\n",
-            "action.yml:5:13: pinned actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+            ".github/actions/setup/action.yaml:6:13: unpinned actions/setup-node@v4\n",
+            ".github/actions/setup/nested/action.yml:6:13: unpinned owner/repo/path@main\n",
+            "action.yml:6:13: pinned actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
         )
     );
 }
@@ -474,6 +474,60 @@ fn composite_actions_are_found_in_discovered_projects() {
         concat!(
             "app/.github/actions/build/deep/action.yaml:3:13: unpinned owner/repo@v1\n",
             "app/action.yml:3:13: unpinned owner/repo@v1\n",
+        )
+    );
+}
+
+#[test]
+fn gitlab_project_includes_are_reported_and_unsupported_includes_warn() {
+    let ci = concat!(
+        "include:\n",
+        "  - local: /ci/build.yml\n",
+        "  - ci/test.yml\n",
+        "  - https://example.com/ci.yml\n",
+        "  - remote: https://example.com/remote.yml\n",
+        "  - template: Auto-DevOps.gitlab-ci.yml\n",
+        "  - component: $CI_SERVER_FQDN/group/proj/name@1.0\n",
+        "  - project: group/pinned\n",
+        "    ref: 0123456789abcdef0123456789abcdef01234567\n",
+        "    file: /a.yml\n",
+        "  - project: group/tagged\n",
+        "    ref: v1.2.3\n",
+        "    file: /a.yml\n",
+        "  - project: group/default\n",
+        "    file: /a.yml\n",
+        "  - project: group/$NAME\n",
+        "    ref: $CI_COMMIT_REF_NAME\n",
+        "    file: /a.yml\n",
+        "  - {project: group/flow, ref: main, file: /a.yml}\n",
+    );
+    let single = "include:\n  project: group/sub\n  file: /a.yml\n";
+    let root = tree(
+        "gitlab-includes",
+        &[
+            (".gitlab-ci.yml", ci),
+            ("team/app/.gitlab-ci.yml", single),
+            ("team/app/sub/.gitlab-ci.yml", single),
+        ],
+    );
+
+    let output = lint(&root);
+
+    assert_eq!(stderr(&output), "");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            ".gitlab-ci.yml:4:5: warning unsupported remote include https://example.com/ci.yml\n",
+            ".gitlab-ci.yml:5:13: warning unsupported remote include https://example.com/remote.yml\n",
+            ".gitlab-ci.yml:6:15: warning unsupported template include Auto-DevOps.gitlab-ci.yml\n",
+            ".gitlab-ci.yml:7:16: warning unsupported component include $CI_SERVER_FQDN/group/proj/name@1.0\n",
+            ".gitlab-ci.yml:9:10: pinned group/pinned@0123456789abcdef0123456789abcdef01234567\n",
+            ".gitlab-ci.yml:12:10: unpinned group/tagged@v1.2.3\n",
+            ".gitlab-ci.yml:14:14: unpinned group/default\n",
+            ".gitlab-ci.yml:16:14: warning unsupported dynamic reference group/$NAME@$CI_COMMIT_REF_NAME\n",
+            ".gitlab-ci.yml:19:32: unpinned group/flow@main\n",
+            "team/app/.gitlab-ci.yml:2:12: unpinned group/sub\n",
         )
     );
 }
