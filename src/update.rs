@@ -15,12 +15,26 @@ use crate::version::{self, Limit};
 /// unannotated pin follows the default branch only with `follow_default_branch`, or after
 /// the user confirms the previewed update in an interactive write. With `write`, updates are
 /// applied as `pin --write` applies pins.
-pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) -> ExitCode {
+pub fn run(
+    scan: &Scan,
+    write: bool,
+    limit: Option<Limit>,
+    follow_default_branch: bool,
+) -> ExitCode {
     let mut github = GitHub::from_env();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
-    pin::apply(scan, write, State::Pinned, "update", |source, reference| {
-        plan(source, reference, &mut github, limit, follow)
-    })
+    pin::apply(
+        scan,
+        write,
+        State::Pinned,
+        "update",
+        |input, source, reference| {
+            let limit = limit
+                .or_else(|| input.settings.limit(reference))
+                .unwrap_or(Limit::Minor);
+            plan(source, reference, &mut github, limit, follow)
+        },
+    )
 }
 
 /// Computes the update of one pinned reference, or `None` when it is up to date.

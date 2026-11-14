@@ -13,30 +13,166 @@ const PROJECT_DEPTH: usize = 2;
 /// Selects the CI files a command reads.
 #[derive(clap::Args)]
 pub struct Scan {
+    #[command(flatten)]
+    pub config: crate::config::Options,
     /// Folder in which to discover projects up to two levels below it
-    #[arg(long, default_value = ".")]
+    #[arg(long, default_value = ".", env = "REFPINNER_PATH")]
     pub path: PathBuf,
     /// Skip discovered paths matching this gitignore-style glob, relative to --path
-    #[arg(long, value_name = "GLOB")]
+    #[arg(
+        long,
+        value_name = "GLOB",
+        env = "REFPINNER_EXCLUDE",
+        value_delimiter = ','
+    )]
     exclude: Vec<String>,
-    /// Do not warn about symlinks found during discovery
-    #[arg(long)]
-    no_symlink_warnings: bool,
+    /// Only scan this platform, overriding the configured platform list
+    #[arg(long, env = "REFPINNER_PLATFORM")]
+    platform: Option<crate::config::Platform>,
+    /// Include references excluded by configuration, for an exclusion audit
+    #[arg(long, env = "REFPINNER_INCLUDE_EXCLUDED")]
+    pub include_excluded: bool,
+    /// Do not warn about symlinks found during discovery (accepts an explicit false)
+    #[arg(long, env = "REFPINNER_NO_SYMLINK_WARNINGS", num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    no_symlink_warnings: Option<bool>,
     /// Files to read instead of discovering them; ignore rules and exclusions do not apply
     #[arg(conflicts_with = "path")]
     files: Vec<PathBuf>,
 }
 
+pub struct Input {
+    pub path: PathBuf,
+    pub settings: crate::config::Settings,
+    pub platform: crate::config::Platform,
+}
+
 impl Scan {
-    /// Returns the selected files, sorted. Prints a warning on stdout for each skipped symlink,
-    /// and for each explicitly supplied backup.
-    pub fn files(&self) -> io::Result<Vec<PathBuf>> {
+    /// Validates every project's configuration before returning any files to a writer.
+    /// Prints a warning on stdout for skipped symlinks and explicitly supplied backups.
+    pub fn files(&self) -> io::Result<Vec<Input>> {
+        let root = self.path.canonicalize()?;
+        let mut projects = vec![root.clone()];
         if self.files.is_empty() {
-            discover(&self.path, &self.exclude, !self.no_symlink_warnings)
-        } else {
-            Ok(explicit(&self.files))
+            let walk = WalkBuilder::new(&root)
+                .hidden(false)
+                .ignore(false)
+                .max_depth(Some(PROJECT_DEPTH))
+                .filter_entry(|entry| {
+                    !matches!(
+                        entry.file_name().to_str(),
+                        Some(".git" | ".github" | ".config")
+                    )
+                })
+                .build();
+            for entry in walk {
+                let entry = entry.map_err(io::Error::other)?;
+                if entry.depth() > 0 && entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                    projects.push(entry.into_path());
+                }
+            }
         }
+        let mut configurations = Vec::new();
+        for project in projects {
+            let settings = crate::config::load(&project, self.config.config.as_deref())
+                .map_err(io::Error::other)?;
+            configurations.push((project, settings));
+        }
+        let candidates = if self.files.is_empty() {
+            discover(&root, &[], |file| {
+                let project = project_for(&root, file);
+                let configured = configurations
+                    .iter()
+                    .find(|(path, _)| *path == project)
+                    .and_then(|(_, settings)| settings.no_symlink_warnings);
+                !self.no_symlink_warnings.or(configured).unwrap_or(false)
+            })?
+        } else {
+            explicit(&self.files)
+                .into_iter()
+                .map(|file| root.join(file))
+                .collect()
+        };
+        let mut selected = Vec::new();
+        for (project, settings) in configurations {
+            let excludes = if self.exclude.is_empty() {
+                settings.exclude.as_deref().unwrap_or_default()
+            } else {
+                &self.exclude
+            };
+            let exclude_root = if self.exclude.is_empty() {
+                &project
+            } else {
+                &root
+            };
+            let mut builder = OverrideBuilder::new(exclude_root);
+            for pattern in excludes {
+                builder
+                    .add(&format!("!{pattern}"))
+                    .map_err(io::Error::other)?;
+            }
+            let matcher = builder.build().map_err(io::Error::other)?;
+            for file in &candidates {
+                if self.files.is_empty() && project_for(&root, file) != project {
+                    continue;
+                }
+                if self.files.is_empty()
+                    && !self.include_excluded
+                    && excluded(&matcher, exclude_root, file)
+                {
+                    continue;
+                }
+                selected.push(Input {
+                    path: file.clone(),
+                    settings: settings.clone(),
+                    platform: crate::config::Platform::Github,
+                });
+            }
+            if self.files.is_empty() {
+                for file in settings.files.as_deref().unwrap_or_default() {
+                    for path in explicit(std::slice::from_ref(&file.path)) {
+                        let path = path.canonicalize().unwrap_or(path);
+                        selected.retain(|input| input.path != path);
+                        selected.push(Input {
+                            path,
+                            settings: settings.clone(),
+                            platform: file.platform,
+                        });
+                    }
+                }
+            }
+        }
+        selected.retain(|input| match self.platform {
+            Some(platform) => input.platform == platform,
+            None => input
+                .settings
+                .platforms
+                .as_ref()
+                .is_none_or(|platforms| platforms.contains(&input.platform)),
+        });
+        selected.sort_by(|a, b| a.path.cmp(&b.path));
+        selected.dedup_by(|a, b| a.path == b.path);
+        Ok(selected)
     }
+}
+
+fn project_for(root: &Path, file: &Path) -> PathBuf {
+    let mut project = root.to_path_buf();
+    for component in relative(root, file).components() {
+        if matches!(
+            component.as_os_str().to_str(),
+            Some(".github" | ".forgejo" | ".gitea")
+        ) {
+            return project;
+        }
+        project.push(component);
+    }
+    file.parent().unwrap_or(root).to_path_buf()
+}
+
+fn excluded(matcher: &ignore::overrides::Override, root: &Path, file: &Path) -> bool {
+    file.ancestors()
+        .take_while(|path| *path != root)
+        .any(|path| matcher.matched(path, path.is_dir()).is_ignore())
 }
 
 /// Returns the recognized CI files of each project, sorted. A project is `root` or a folder up
@@ -48,7 +184,11 @@ impl Scan {
 ///
 /// shortcut: a tracked file that matches a Git ignore rule is skipped, because discovery does
 /// not read the Git index; read the index if users report missing tracked workflows.
-fn discover(root: &Path, excludes: &[String], warn: bool) -> io::Result<Vec<PathBuf>> {
+fn discover(
+    root: &Path,
+    excludes: &[String],
+    warn: impl Fn(&Path) -> bool,
+) -> io::Result<Vec<PathBuf>> {
     let mut overrides = OverrideBuilder::new(root);
     for glob in excludes {
         overrides
@@ -78,7 +218,7 @@ fn discover(root: &Path, excludes: &[String], warn: bool) -> io::Result<Vec<Path
             Location::Ci | Location::CiFile => true,
         };
         if kind.is_symlink() {
-            if warn && recognized {
+            if recognized && warn(entry.path()) {
                 let shown = display(relative(root, entry.path()));
                 println!("{shown}: warning: skipped symlink");
             }

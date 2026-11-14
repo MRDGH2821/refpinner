@@ -16,7 +16,8 @@ pub fn parse(tag: &str) -> Option<Vec<u64>> {
 }
 
 /// How far an update may move from the current version.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub enum Limit {
     /// Any higher version.
     Major,
