@@ -138,6 +138,15 @@ an emerging cross-ecosystem convention:
 - <https://dot-config.github.io/> — the `.config/` directory convention
 - <https://github.com/pi0/config-dir> — reference implementation for resolving it
 
+## Online lint and JSON
+
+`refpinner lint` stays offline by default and makes no network calls.
+`refpinner lint --online` verifies pinned actions and image digests against forges and registries.
+Exact-tag mismatches fail (exit 1). Available updates, including newer majors, are reported without failing unless you pass `--fail-on-update`.
+Incomplete online checks (unreachable hosts, rate limits) exit 3 and do not stop checks on other references.
+`--json` prints a structured report with `status`, `results`, and `warnings` (including skipped symlinks).
+Unsupported forms remain warnings and do not fail lint by themselves.
+
 ## Image pin architecture
 
 `src/image.rs` extracts image references from GitHub, Forgejo, Gitea, and GitLab YAML.

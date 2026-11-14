@@ -50,6 +50,7 @@ impl Forge {
         Self { url, requests }
     }
 
+    #[allow(dead_code)]
     pub fn count(&self, path: &str) -> usize {
         self.requests
             .lock()

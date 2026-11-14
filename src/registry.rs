@@ -79,7 +79,7 @@ impl Registry {
             let mut response = self.get(&url, token.as_deref())?;
             if response.status().as_u16() == 401 && token.is_none() {
                 let challenge = header(&response, "www-authenticate").unwrap_or_default();
-                token = Some(self.token(&challenge)?);
+                token = Some(self.token(&challenge, &name.host)?);
                 response = self.get(&url, token.as_deref())?;
             }
             match response.status().as_u16() {

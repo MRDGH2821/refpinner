@@ -76,13 +76,16 @@ pub fn apply(
         .path
         .canonicalize()
         .unwrap_or_else(|_| scan.path.clone());
-    let files = match scan.files() {
-        Ok(files) => files,
+    let discovery = match scan.files() {
+        Ok(discovery) => discovery,
         Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
     };
+    for skip in &discovery.warnings {
+        println!("{}: warning: {}", skip.path, skip.message);
+    }
     let interactive = write && io::stdin().is_terminal();
     let mut status = OK;
-    for input in files {
+    for input in discovery.files {
         let file = &input.path;
         let shown = display(file.strip_prefix(root).unwrap_or(file));
         let parsed = fs::read_to_string(file)
