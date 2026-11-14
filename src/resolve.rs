@@ -128,23 +128,20 @@ impl GitHub {
         let Some(track) = version::parse(tag) else {
             return Ok(None);
         };
-        if track.len() >= 3 {
+        if track.core.len() >= 3 || track.is_prerelease() {
             return Ok(Some(tag.to_owned()));
         }
         let path = format!("/repos/{repo}/git/matching-refs/tags/{}.", encode(tag));
         let refs = self.get(&path)?.unwrap_or(Value::Null);
-        let mut candidates: Vec<(Vec<u64>, &str, &Value)> = refs
+        let mut candidates: Vec<(version::Version, &str, &Value)> = refs
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|entry| {
                 let name = entry["ref"].as_str()?.strip_prefix("refs/tags/")?;
                 let parsed = version::parse(name)?;
-                (parsed.len() > track.len() && parsed.starts_with(&track)).then_some((
-                    parsed,
-                    name,
-                    &entry["object"],
-                ))
+                (parsed.core.len() > track.core.len() && parsed.core.starts_with(&track.core))
+                    .then_some((parsed, name, &entry["object"]))
             })
             .collect();
         // Highest first; a longer version sorts above its own prefix, so `v4.2.0` beats `v4.2`.

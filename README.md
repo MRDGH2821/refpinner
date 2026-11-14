@@ -2,13 +2,25 @@
 
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/refs/heads/master/img/badge/black-badge.json)](https://github.com/copier-org/copier)
 
+## Prerelease updates
+
+Use `refpinner update --pre` to admit all prereleases, or `refpinner update --rc`
+to admit only release candidates. Both options also admit stable releases. They
+conflict with each other and respect `--major`, `--minor`, and `--patch` limits.
+
+Without either option, stable releases are eligible. An existing prerelease can
+advance within the same numeric version and graduate to a stable release, but it
+cannot move to another version's prereleases without opting in.
+
+Release candidates use `rc`, `rc.1`, or `rc1` suffixes, without regard to case.
+Classification does not change SemVer ordering: `rc.10` follows `rc.2`, while
+`rc10` sorts before `rc2` as text. Identifier ordering remains case-sensitive.
+Build metadata does not affect precedence, and metadata-only changes are not
+updates. Tags with different numeric precision are not compared.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, checks, and the contribution workflow.
-
-
-
-
 
 ## Recommendations
 
