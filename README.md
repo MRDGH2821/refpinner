@@ -101,8 +101,12 @@ Use `--no-symlink-warnings=false` to override a true environment or configuratio
 Existing forge API environment variables remain available.
 
 `version_rules` accepts a list of `{ pattern = "reference glob", glob = "tag glob" }` or
-`{ pattern = "reference glob", regex = "tag regex" }` tables. A regex must contain a named `major` capture.
-Validation checks these patterns offline. Image tag interpretation and component selection belong to issue #12 and are not implemented here.
+`{ pattern = "reference glob", regex = "tag regex" }` tables. Match the image name without a tag
+(for example `node` or `ghcr.io/owner/tool`). A regex must contain a named `major` capture; optional
+`minor`, `patch`, `prerelease`, `suffix`, and other named groups become version components. Glob
+patterns may use `{name}` placeholders for the same captures. The last matching rule replaces
+built-in Docker-style tag interpretation. Unattended updates keep named components fixed; changing
+them requires an interactive write or a rule that makes the desired tag the primary match.
 
 ## Prerelease updates
 
@@ -145,4 +149,4 @@ It supports anonymous Bearer authentication and hashes the manifest bytes when t
 Image pins retain the source tag as `name:tag@sha256:...`, with `latest` for an omitted tag.
 Images and GitHub actions share `pin::apply` for previews, confirmation, and writes.
 `write::replace` checks that only selected YAML values change and saves the original bytes in a numbered backup.
-Image updates and private registry credentials belong to separate issues.
+`refpinner update` advances comparable image tags within the selected limits; private registry credentials belong to a separate issue.

@@ -1,7 +1,11 @@
+use std::cmp::Ordering;
+
 use saphyr::{LoadableYamlNode, MarkedYaml, ScanError};
 
+use crate::config::Settings;
 use crate::github::{byte_offset, value_span, warning, yaml_warnings};
 use crate::reference::{Kind, Reference, State};
+use crate::version::{self, Limit, Releases, Version};
 
 /// Builds the reference for the image named by the string `node`. Returns `None` when
 /// `node` names no image: it is not a string, or it is empty, which disables a service.
@@ -93,6 +97,136 @@ pub struct Name {
     pub repository: String,
     /// The tag, or `None` when the image omits it and `latest` applies.
     pub tag: Option<String>,
+}
+
+/// A tag split into a primary version and optional named variant components.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TagParts {
+    pub version: Version,
+    /// Frozen non-version suffix such as `-slim`, when present.
+    pub suffix: String,
+    /// Named versioned components such as `alpine` → `3.19`.
+    pub components: Vec<(String, Version)>,
+}
+
+impl TagParts {
+    /// Whether `other` shares this tag's frozen suffix and component names.
+    pub fn compatible(&self, current: &Self) -> bool {
+        self.suffix == current.suffix
+            && self.components.len() == current.components.len()
+            && self
+                .components
+                .iter()
+                .zip(&current.components)
+                .all(|(a, b)| a.0 == b.0)
+    }
+
+    pub fn cmp_version(&self, other: &Self) -> Ordering {
+        self.version.cmp(&other.version).then_with(|| {
+            self.components
+                .iter()
+                .zip(&other.components)
+                .map(|(a, b)| a.1.cmp(&b.1))
+                .find(|order| *order != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
+        })
+    }
+
+    /// Whether every named component is an allowed upgrade from `current`.
+    pub fn components_allowed(&self, current: &Self, limit: Limit, releases: Releases) -> bool {
+        self.components
+            .iter()
+            .zip(&current.components)
+            .all(|(a, b)| a.1 == b.1 || (releases.allows(&b.1, &a.1) && limit.allows(&b.1, &a.1)))
+    }
+}
+
+/// Interprets `tag` with the last matching `version_rules` entry for `reference`, or the
+/// built-in Docker-style split when no rule matches.
+pub fn tag_parts(tag: &str, settings: &Settings, reference: &str) -> Option<TagParts> {
+    match settings.version_rule(reference) {
+        Some(rule) => rule.parse(tag),
+        None => builtin_tag_parts(tag),
+    }
+}
+
+/// Splits `4.2.1`, `4.2.1-alpine` and `4.2.1-alpine3.19` into a primary version plus variants.
+fn builtin_tag_parts(tag: &str) -> Option<TagParts> {
+    let (version_text, rest) = split_version_prefix(tag)?;
+    let version = version::parse(version_text)?;
+    if rest.is_empty() {
+        return Some(TagParts {
+            version,
+            suffix: String::new(),
+            components: Vec::new(),
+        });
+    }
+    // `alpine3.19` is a named versioned component; plain `alpine` is a frozen suffix.
+    let body = rest.strip_prefix('-').unwrap_or(rest);
+    let split = body
+        .char_indices()
+        .find(|&(_, c)| c.is_ascii_digit())
+        .map(|(index, _)| index);
+    match split {
+        Some(0) => None,
+        Some(index) => {
+            let (name, numbers) = body.split_at(index);
+            let component = version::parse(numbers)?;
+            Some(TagParts {
+                version,
+                suffix: String::new(),
+                components: vec![(name.to_owned(), component)],
+            })
+        }
+        None => Some(TagParts {
+            version,
+            suffix: format!("-{body}"),
+            components: Vec::new(),
+        }),
+    }
+}
+
+/// Leading `v?digits(.digits)*` with an optional SemVer prerelease; the rest is the variant.
+fn split_version_prefix(tag: &str) -> Option<(&str, &str)> {
+    let start = usize::from(tag.starts_with('v'));
+    let body = &tag[start..];
+    let core_end = body
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(body.len());
+    if core_end == 0
+        || body[..core_end]
+            .split('.')
+            .any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let after = &body[core_end..];
+    if let Some(pre) = after.strip_prefix('-') {
+        let label = pre.split(['.', '-']).next().unwrap_or("");
+        if is_prerelease_label(label) {
+            // Grow the version through the prerelease; a later `-<variant>` stays separate.
+            for (index, _) in pre.match_indices('-') {
+                let candidate = &tag[..start + core_end + 1 + index];
+                if version::parse(candidate).is_some()
+                    && !is_prerelease_label(pre[index + 1..].split(['.', '-']).next().unwrap_or(""))
+                {
+                    return Some((candidate, &tag[candidate.len()..]));
+                }
+            }
+            return version::parse(tag).map(|_| (tag, ""));
+        }
+    }
+    Some((&tag[..start + core_end], after))
+}
+
+fn is_prerelease_label(label: &str) -> bool {
+    label.eq_ignore_ascii_case("alpha")
+        || label.eq_ignore_ascii_case("beta")
+        || label.eq_ignore_ascii_case("pre")
+        || label.eq_ignore_ascii_case("rc")
+        || (label.len() > 2
+            && label[..2].eq_ignore_ascii_case("rc")
+            && label[2..].bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Parses `[docker://][host[:port]/]path[:tag]` with Docker's normalization: a first

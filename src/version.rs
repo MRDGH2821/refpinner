@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 
 /// A numeric version with optional SemVer prerelease identifiers. Metadata has no precedence.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Version {
     pub core: Vec<u64>,
-    pre: Vec<String>,
+    pub(crate) pre: Vec<String>,
 }
 
 impl Version {
