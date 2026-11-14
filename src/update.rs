@@ -6,7 +6,7 @@ use crate::edit::Edit;
 use crate::pin::{self, Change, line_end};
 use crate::reference::{Kind, Reference, State};
 use crate::resolve::GitHub;
-use crate::version::{self, Limit};
+use crate::version::{self, Limit, Releases};
 
 /// Previews updates of the pinned references in the files selected by `scan`.
 ///
@@ -15,7 +15,13 @@ use crate::version::{self, Limit};
 /// unannotated pin follows the default branch only with `follow_default_branch`, or after
 /// the user confirms the previewed update in an interactive write. With `write`, updates are
 /// applied as `pin --write` applies pins.
-pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) -> ExitCode {
+pub fn run(
+    scan: &Scan,
+    write: bool,
+    limit: Limit,
+    releases: Releases,
+    follow_default_branch: bool,
+) -> ExitCode {
     let mut github = GitHub::from_env();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
     pin::apply(scan, write, State::Pinned, "update", |source, reference| {
@@ -23,7 +29,7 @@ pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) 
         if reference.kind == Kind::Image {
             return Ok(None);
         }
-        plan(source, reference, &mut github, limit, follow)
+        plan(source, reference, &mut github, limit, releases, follow)
     })
 }
 
@@ -33,6 +39,7 @@ fn plan(
     reference: &Reference,
     github: &mut GitHub,
     limit: Limit,
+    releases: Releases,
     follow: bool,
 ) -> Result<Option<Change>, String> {
     let (action, commit) = reference
@@ -88,33 +95,34 @@ fn plan(
         let summary = format!("{} moved", note.version);
         return Ok((tip != commit).then(|| change(summary, tip, at, note.version.clone())));
     };
-    let (exact, current, track) = if current.len() >= 3 || note.track.is_some() {
-        let tagged = github.resolve(action, &note.version)?.commit;
-        if tagged != commit {
+    let (exact, current, track) =
+        if current.core.len() >= 3 || current.is_prerelease() || note.track.is_some() {
+            let tagged = github.resolve(action, &note.version)?.commit;
+            if tagged != commit {
+                return Err(format!(
+                    "tag {} moved to {tagged}; review it before updating",
+                    note.version
+                ));
+            }
+            (note.version.clone(), current, note.track.clone())
+        } else if let Some(exact) = github.exact(action, &note.version, commit)? {
+            let parsed = version::parse(&exact).ok_or("exact version is not a version")?;
+            (exact, parsed, Some(note.version.clone()))
+        } else if limit == Limit::Patch {
             return Err(format!(
-                "tag {} moved to {tagged}; review it before updating",
+                "cannot find the exact version of {commit} on track {}",
                 note.version
             ));
-        }
-        (note.version.clone(), current, note.track.clone())
-    } else if let Some(exact) = github.exact(action, &note.version, commit)? {
-        let parsed = version::parse(&exact).ok_or("exact version is not a version")?;
-        (exact, parsed, Some(note.version.clone()))
-    } else if limit == Limit::Patch {
-        return Err(format!(
-            "cannot find the exact version of {commit} on track {}",
-            note.version
-        ));
-    } else {
-        // Without an exact version the floating tag itself is the track to follow.
-        let moved = github.resolve(action, &note.version)?;
-        let summary = format!("track {} moved", note.version);
-        let text = match moved.version.filter(|exact| *exact != note.version) {
-            Some(exact) => format!("{exact} (track: {})", note.version),
-            None => note.version.clone(),
+        } else {
+            // Without an exact version the floating tag itself is the track to follow.
+            let moved = github.resolve(action, &note.version)?;
+            let summary = format!("track {} moved", note.version);
+            let text = match moved.version.filter(|exact| *exact != note.version) {
+                Some(exact) => format!("{exact} (track: {})", note.version),
+                None => note.version.clone(),
+            };
+            return Ok((moved.commit != commit).then(|| change(summary, moved.commit, at, text)));
         };
-        return Ok((moved.commit != commit).then(|| change(summary, moved.commit, at, text)));
-    };
     let prefix = &exact[..exact.len()
         - exact
             .trim_start_matches(|c: char| !c.is_ascii_digit())
@@ -127,7 +135,9 @@ fn plan(
                 .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
         })
         .filter_map(|name| Some((version::parse(&name)?, name)))
-        .filter(|(candidate, _)| limit.allows(&current, candidate))
+        .filter(|(candidate, _)| {
+            releases.allows(&current, candidate) && limit.allows(&current, candidate)
+        })
         .max();
     let Some((chosen, name)) = best else {
         return Ok(None);
@@ -135,8 +145,11 @@ fn plan(
     let tip = github.resolve(action, &name)?.commit;
     // A track keeps its precision and follows the version, so a major upgrade moves `v4` to `v5`.
     let track = track.map(|track| match version::parse(&track) {
-        Some(parts) if parts.len() <= chosen.len() => {
-            let kept: Vec<String> = chosen[..parts.len()].iter().map(u64::to_string).collect();
+        Some(parts) if parts.core.len() <= chosen.core.len() => {
+            let kept: Vec<String> = chosen.core[..parts.core.len()]
+                .iter()
+                .map(u64::to_string)
+                .collect();
             format!("{prefix}{}", kept.join("."))
         }
         _ => track,

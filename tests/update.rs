@@ -108,6 +108,221 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Tag routes with the current tag at OLD and each candidate at a different commit.
+fn versions(current: &str, candidates: &[&str]) -> Forge {
+    let mut routes = Vec::new();
+    let mut entries = Vec::new();
+    for (index, tag) in std::iter::once(current)
+        .chain(candidates.iter().copied())
+        .enumerate()
+    {
+        let commit = if index == 0 {
+            OLD.to_owned()
+        } else {
+            format!("{index:040x}")
+        };
+        let body = serde_json::json!({
+            "ref": format!("refs/tags/{tag}"),
+            "object": { "sha": commit, "type": "commit" }
+        });
+        entries.push(body.clone());
+        routes.push((
+            format!("/repos/owner/tool/git/ref/tags/{}", tag.replace('+', "%2B")),
+            200,
+            body.to_string(),
+        ));
+    }
+    routes.push((
+        "/repos/owner/tool/git/matching-refs/tags/v".to_owned(),
+        200,
+        serde_json::to_string(&entries).unwrap(),
+    ));
+    Forge::new(
+        &routes
+            .iter()
+            .map(|(path, status, body)| (path.as_str(), *status, body.as_str()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+#[test]
+fn stable_updates_filter_prereleases_before_ordering() {
+    let root = steps(
+        "prerelease-policy",
+        &[&format!("owner/tool@{OLD} # v4.2.1")],
+    );
+    let forge = versions(
+        "v4.2.1",
+        &["v4.3.0", "v4.4.0-rc.2", "v4.4.0-rc.10", "v4.5.0-beta"],
+    );
+    for (args, chosen) in [
+        (&[][..], "v4.3.0"),
+        (&["--rc"][..], "v4.4.0-rc.10"),
+        (&["--pre"][..], "v4.5.0-beta"),
+    ] {
+        let output = update(&root, &forge.url, args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("v4.2.1 -> {chosen}\n")),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn existing_prereleases_advance_within_their_release_and_graduate() {
+    for (index, (current, candidates, chosen)) in [
+        (
+            "v4.3.0-beta.1",
+            vec!["v4.3.0-beta.2", "v4.4.0-rc.1"],
+            "v4.3.0-beta.2",
+        ),
+        (
+            "v4.3.0-rc.1",
+            vec!["v4.3.0-rc.2", "v4.3.0", "v4.4.0-beta"],
+            "v4.3.0",
+        ),
+        (
+            "v4.3.0-rc.1",
+            vec!["v4.3.0", "v4.4.0", "v4.5.0-rc"],
+            "v4.4.0",
+        ),
+        ("v4.3-rc.1", vec!["v4.3-rc.2", "v4.4-beta"], "v4.3-rc.2"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = steps(
+            &format!("prerelease-sequence-{index}"),
+            &[&format!("owner/tool@{OLD} # {current}")],
+        );
+        let forge = versions(current, &candidates);
+        let output = update(&root, &forge.url, &[]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("{current} -> {chosen}\n")),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn rc_recognition_is_case_insensitive_but_not_substring_matching() {
+    for (index, rc) in ["rc", "rc.1", "rc1", "RC", "Rc.2", "rC3"]
+        .into_iter()
+        .enumerate()
+    {
+        let chosen = format!("v4.3.0-{rc}");
+        let forge = versions(
+            "v4.2.1",
+            &[
+                &chosen,
+                "v4.9.0-preview",
+                "v4.9.0-source",
+                "v4.9.0-rc-preview",
+                "v4.9.0-rc.1.beta",
+            ],
+        );
+        let root = steps(
+            &format!("rc-form-{index}"),
+            &[&format!("owner/tool@{OLD} # v4.2.1")],
+        );
+        let output = update(&root, &forge.url, &["--rc"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("v4.2.1 -> {chosen}\n")),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn release_options_obey_version_limits_and_keep_stable_eligible() {
+    let forge = versions("v4.2.1", &["v4.2.2-rc.1", "v4.3.0-rc.1", "v5.0.0-rc.1"]);
+    for (args, chosen) in [
+        (&["--rc", "--patch"][..], "v4.2.2-rc.1"),
+        (&["--pre", "--patch"][..], "v4.2.2-rc.1"),
+        (&["--rc", "--minor"][..], "v4.3.0-rc.1"),
+        (&["--pre", "--minor"][..], "v4.3.0-rc.1"),
+        (&["--rc", "--major"][..], "v5.0.0-rc.1"),
+        (&["--pre", "--major"][..], "v5.0.0-rc.1"),
+    ] {
+        let root = steps(
+            "release-limits",
+            &[&format!("owner/tool@{OLD} # v4.2.1 (track: v4)")],
+        );
+        let output = update(&root, &forge.url, args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("v4.2.1 -> {chosen}\n")),
+            "{}",
+            stdout(&output)
+        );
+    }
+    let forge = versions("v4.2.1", &["v4.3.0-rc.10", "v4.3.0"]);
+    for args in [&["--rc"][..], &["--pre"][..]] {
+        let root = steps("stable-eligible", &[&format!("owner/tool@{OLD} # v4.2.1")]);
+        let output = update(&root, &forge.url, args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("v4.2.1 -> v4.3.0\n"),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn prerelease_write_keeps_track_comments_and_backup_and_repeats_cleanly() {
+    let root = steps(
+        "prerelease-write",
+        &[&format!(
+            "'owner/tool@{OLD}' # v4.2.1 (track: v4.2) # build"
+        )],
+    );
+    let before = workflow(&root);
+    let forge = versions("v4.2.1", &["v4.3.0-rc.1"]);
+    let output = update(&root, &forge.url, &["--rc", "--write"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        workflow(&root),
+        "jobs:\n  a:\n    steps:\n      - uses: 'owner/tool@0000000000000000000000000000000000000001' # v4.3.0-rc.1 (track: v4.3) # build\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".github/workflows/ci.yml.bkp")).unwrap(),
+        before
+    );
+    let repeated = update(&root, &forge.url, &["--rc", "--write"]);
+    assert_eq!(repeated.status.code(), Some(0), "{}", stderr(&repeated));
+    assert_eq!(stdout(&repeated), "");
+    assert!(!root.join(".github/workflows/ci.yml.bkp2").exists());
+}
+
+#[test]
+fn metadata_only_changes_do_not_update_or_downgrade() {
+    for (index, current) in ["v4.3.0+build.1", "v4.3.0-rc.10+build.1"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = steps(
+            &format!("metadata-{index}"),
+            &[&format!("owner/tool@{OLD} # {current}")],
+        );
+        let candidates = if index == 0 {
+            vec!["v4.3.0+build.2", "v4.3.0-rc.10", "v4.2.9"]
+        } else {
+            vec!["v4.3.0-rc.10+build.2", "v4.3.0-rc.2", "v4.2.9"]
+        };
+        let forge = versions(current, &candidates);
+        let output = update(&root, &forge.url, &["--pre"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "");
+    }
+}
+
 #[test]
 fn default_and_minor_select_highest_exact_version_within_major_and_keep_track() {
     for args in [&[][..], &["--minor"]] {
@@ -213,6 +428,7 @@ fn conflicting_limits_are_rejected_before_any_request() {
         ["--major", "--patch"],
         ["--minor", "--patch"],
         ["--major", "--minor"],
+        ["--pre", "--rc"],
     ] {
         let output = update(&root, &forge.url, &args);
 

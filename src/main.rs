@@ -46,6 +46,12 @@ enum Command {
         /// Stay within the current minor version
         #[arg(long)]
         patch: bool,
+        /// Admit all prereleases as well as stable releases
+        #[arg(long, conflicts_with = "rc")]
+        pre: bool,
+        /// Admit release candidates as well as stable releases
+        #[arg(long)]
+        rc: bool,
         /// Follow the default branch for pins without an annotation
         #[arg(long)]
         follow_default_branch: bool,
@@ -70,6 +76,8 @@ fn main() -> ExitCode {
         Command::Update {
             major,
             patch,
+            pre,
+            rc,
             follow_default_branch,
             write,
             scan,
@@ -80,7 +88,12 @@ fn main() -> ExitCode {
                 (_, true) => version::Limit::Patch,
                 _ => version::Limit::Minor,
             };
-            update::run(&scan, write, limit, follow_default_branch)
+            let releases = match (pre, rc) {
+                (true, _) => version::Releases::Pre,
+                (_, true) => version::Releases::Rc,
+                _ => version::Releases::Stable,
+            };
+            update::run(&scan, write, limit, releases, follow_default_branch)
         }
     }
 }
