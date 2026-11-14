@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use crate::discover::Scan;
 use crate::edit::Edit;
 use crate::pin::{self, Change, line_end};
-use crate::reference::{Reference, State};
+use crate::reference::{Kind, Reference, State};
 use crate::resolve::GitHub;
 use crate::version::{self, Limit};
 
@@ -19,6 +19,10 @@ pub fn run(scan: &Scan, write: bool, limit: Limit, follow_default_branch: bool) 
     let mut github = GitHub::from_env();
     let follow = follow_default_branch || (write && io::stdin().is_terminal());
     pin::apply(scan, write, State::Pinned, "update", |source, reference| {
+        // shortcut: image pins are left as they are; the image update ticket (#12) adds them.
+        if reference.kind == Kind::Image {
+            return Ok(None);
+        }
         plan(source, reference, &mut github, limit, follow)
     })
 }

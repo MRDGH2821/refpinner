@@ -1,9 +1,11 @@
 mod discover;
 mod edit;
 mod github;
+mod image;
 mod lint;
 mod pin;
 mod reference;
+mod registry;
 mod resolve;
 mod update;
 mod version;

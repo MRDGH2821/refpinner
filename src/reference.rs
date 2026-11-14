@@ -12,6 +12,17 @@ pub struct Reference {
     pub state: State,
     /// Byte range of the value in the source, including any quotes; empty for warnings.
     pub span: Range<usize>,
+    /// What the reference names, which selects how it is resolved.
+    pub kind: Kind,
+}
+
+/// The kind of dependency a [`Reference`] names.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    /// A Git-hosted action or reusable workflow, pinned to a commit.
+    Action,
+    /// A container image, pinned to a digest.
+    Image,
 }
 
 /// Lint classification of a [`Reference`].
