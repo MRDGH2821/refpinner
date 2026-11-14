@@ -452,3 +452,42 @@ fn write_pins_images_in_each_location_with_backups_and_reports_registry_failures
         ".github/actions/base/action.yml:3:10: pinned docker://alpine:latest@{ALPINE}\n"
     )));
 }
+
+#[test]
+fn registry_auth_scheme_is_case_insensitive_and_accepts_access_token() {
+    let original = "image: alpine\n";
+    let root = project("auth-scheme", &[(".gitlab-ci.yml", original)]);
+    let registry = Registry::new(vec![
+        (
+            "HEAD /v2/library/alpine/manifests/latest",
+            401,
+            vec![("WWW-Authenticate", r#"bearer realm="{url}/token""#)],
+            "",
+        ),
+        (
+            "GET /token",
+            200,
+            Vec::new(),
+            r#"{"access_token":"public"}"#,
+        ),
+        (
+            "HEAD /v2/library/alpine/manifests/latest Bearer public",
+            200,
+            vec![("Docker-Content-Digest", ALPINE)],
+            "",
+        ),
+    ]);
+
+    let output = refpinner(&root, &registry, &["pin", "--write"]);
+
+    assert_eq!(stderr(&output), "");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml")).expect("read image"),
+        format!("image: alpine:latest@{ALPINE}\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitlab-ci.yml.bkp")).expect("read backup"),
+        original
+    );
+}

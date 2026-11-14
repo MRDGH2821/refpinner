@@ -127,8 +127,9 @@ impl Registry {
     /// (#14) adds them, scoped to the registry host that issued the challenge.
     fn token(&self, challenge: &str) -> Result<String, String> {
         let params = challenge
-            .strip_prefix("Bearer ")
-            .map(parameters)
+            .split_once(' ')
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+            .map(|(_, params)| parameters(params))
             .ok_or("registry requires authentication, which is not supported yet")?;
         let get = |key: &str| {
             params
