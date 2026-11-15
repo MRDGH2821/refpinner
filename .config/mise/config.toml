@@ -57,6 +57,7 @@ run = ["bun install", { task = "ai-setup" }]
 "aqua:owenlamont/ryl" = "0.29.0"
 betterleaks = "1.10.1"
 bun = "1.4.4"
+"cargo:cargo-edit" = "0.13.14"
 cocogitto = "7.0.0"
 cspell = "10.4.1"
 editorconfig-checker = "4.0.2"
