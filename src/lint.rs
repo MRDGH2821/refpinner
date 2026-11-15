@@ -31,16 +31,25 @@ pub struct Options {
     pub fail_on_update: bool,
 }
 
-/// Lints the files selected by `scan` and prints one line per reference, or JSON when asked.
-pub fn run(scan: &Scan, options: &Options, actions: &Actions) -> ExitCode {
-    let root = &scan
+/// Canonicalizes `scan.path` and loads its discovery, or an error string.
+pub fn discovery(scan: &Scan) -> Result<(std::path::PathBuf, crate::discover::Discovery), String> {
+    let root = scan
         .path
         .canonicalize()
         .unwrap_or_else(|_| scan.path.clone());
-    let discovery = match scan.files() {
-        Ok(discovery) => discovery,
-        Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
+    let discovery = scan
+        .files()
+        .map_err(|error| format!("cannot scan {}: {error}", root.display()))?;
+    Ok((root, discovery))
+}
+
+/// Lints the files selected by `scan` and prints one line per reference, or JSON when asked.
+pub fn run(scan: &Scan, options: &Options, actions: &Actions) -> ExitCode {
+    let (root, discovery) = match discovery(scan) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(&error),
     };
+    let root = &root;
     let mut report = Report {
         status: OK,
         results: Vec::new(),

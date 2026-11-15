@@ -84,16 +84,23 @@ pub fn plan(
     })
 }
 
+/// Collects project-include entries from one document's `include` key.
+fn include_entries<'a>(document: &'a MarkedYaml<'a>) -> Option<Vec<&'a MarkedYaml<'a>>> {
+    let include = document.data.as_mapping_get("include")?;
+    Some(
+        include
+            .data
+            .as_sequence()
+            .map_or_else(|| vec![include], |seq| seq.iter().collect()),
+    )
+}
+
 /// Finds the containing include mapping and copies its key indentation.
 fn context(source: &str, reference: &Reference) -> Result<(bool, usize), String> {
     for document in MarkedYaml::load_from_str(source).map_err(|e| e.to_string())? {
-        let Some(include) = document.data.as_mapping_get("include") else {
+        let Some(entries) = include_entries(&document) else {
             continue;
         };
-        let entries = include
-            .data
-            .as_sequence()
-            .map_or_else(|| vec![include], |seq| seq.iter().collect());
         for entry in entries {
             let Some(project) = entry.data.as_mapping_get("project") else {
                 continue;
@@ -145,10 +152,9 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
         let Some(include) = document.data.as_mapping_get("include") else {
             continue;
         };
-        let entries = include
-            .data
-            .as_sequence()
-            .map_or_else(|| vec![include], |seq| seq.iter().collect());
+        let Some(entries) = include_entries(&document) else {
+            continue;
+        };
         for entry in entries {
             if aliases.contains(&include.span.start) || aliases.contains(&entry.span.start) {
                 continue;

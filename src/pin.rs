@@ -72,14 +72,11 @@ pub fn apply(
     noun: &str,
     mut plan: impl FnMut(&crate::discover::Input, &str, &Reference) -> Result<Option<Change>, String>,
 ) -> ExitCode {
-    let root = &scan
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| scan.path.clone());
-    let discovery = match scan.files() {
-        Ok(discovery) => discovery,
-        Err(error) => return fail(&format!("cannot scan {}: {error}", root.display())),
+    let (root, discovery) = match lint::discovery(scan) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(&error),
     };
+    let root = &root;
     for skip in &discovery.warnings {
         println!("{}: warning: {}", skip.path, skip.message);
     }

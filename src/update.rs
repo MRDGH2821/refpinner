@@ -64,6 +64,18 @@ pub fn run(
     )
 }
 
+/// Ensures the span text matches `reference.text` without escapes or line breaks.
+fn plain_span<'a>(source: &'a str, reference: &Reference) -> Result<(&'a str, bool), String> {
+    let raw = &source[reference.span.clone()];
+    let quoted = raw.starts_with(['"', '\'']);
+    if raw.get(usize::from(quoted)..raw.len() - usize::from(quoted)) != Some(&reference.text) {
+        return Err(String::from(
+            "cannot edit a reference with escapes or line breaks",
+        ));
+    }
+    Ok((raw, quoted))
+}
+
 /// Computes the update of one pinned image, or `None` when it is up to date.
 fn image_plan(
     source: &str,
@@ -73,13 +85,7 @@ fn image_plan(
     limit: Limit,
     releases: Releases,
 ) -> Result<Option<Change>, String> {
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    if raw.get(usize::from(quoted)..raw.len() - usize::from(quoted)) != Some(&reference.text) {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
+    let (_, quoted) = plain_span(source, reference)?;
     let (left, digest) = reference
         .text
         .rsplit_once('@')
@@ -252,13 +258,7 @@ fn plan(
         .text
         .rsplit_once('@')
         .ok_or("reference has no @revision")?;
-    let raw = &source[reference.span.clone()];
-    let quoted = raw.starts_with(['"', '\'']);
-    if raw.get(usize::from(quoted)..raw.len() - usize::from(quoted)) != Some(&reference.text) {
-        return Err(String::from(
-            "cannot edit a reference with escapes or line breaks",
-        ));
-    }
+    let (_, quoted) = plain_span(source, reference)?;
     let revision_end = reference.span.end - usize::from(quoted);
     let change = |summary: String, new: String, at: (usize, usize), annotation: String| Change {
         summary,
