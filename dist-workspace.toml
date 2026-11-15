@@ -17,6 +17,8 @@ installers = ["shell", "powershell"]
 # Sign a packslip after the GitHub Release is announced
 # (https://packslip.dev/docs/publishing/)
 post-announce-jobs = ["./packslip"]
+# Build + upload artifacts on PRs (no GitHub Release publish)
+pr-run-mode = "upload"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = [
   "aarch64-apple-darwin",
@@ -28,6 +30,11 @@ targets = [
   "x86_64-unknown-linux-musl",
   "x86_64-pc-windows-msvc"
 ]
+
+# Skip messense/cargo-xwin (Rust 1.89) — build Win ARM natively
+[dist.github-custom-runners.aarch64-pc-windows-msvc]
+host = "aarch64-pc-windows-msvc"
+runner = "windows-11-arm"
 
 [workspace]
 members = ["cargo:."]
