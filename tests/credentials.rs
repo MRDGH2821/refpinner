@@ -90,6 +90,18 @@ fn store_file(name: &str) -> PathBuf {
     path
 }
 
+/// Empty Docker config so `docker_credential` cannot steal registry lookups on CI runners.
+fn empty_docker_config(name: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("credentials")
+        .join(name)
+        .join("docker-config");
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("mkdir docker config");
+    std::fs::write(path.join("config.json"), "{}\n").expect("write docker config");
+    path
+}
+
 fn refpinner(args: &[&str], store: &Path, envs: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_refpinner"));
     command.args(args).env("REFPINNER_CREDENTIALS_FILE", store);
@@ -495,17 +507,25 @@ fn private_registry_image_uses_basic_auth_on_token_endpoint_without_leaking_secr
     )
     .expect("write");
 
+    let docker_config = empty_docker_config("private-registry");
     let mut command = Command::new(env!("CARGO_BIN_EXE_refpinner"));
     command
         .args(["pin"])
         .current_dir(&root)
         .env("REFPINNER_CREDENTIALS_FILE", &store)
-        .env("REFPINNER_REGISTRY_URL", &registry.url);
+        .env("REFPINNER_REGISTRY_URL", &registry.url)
+        .env("DOCKER_CONFIG", &docker_config);
     for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
         command.env_remove(proxy);
     }
     let output = command.output().expect("run");
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={} keys={:?}",
+        stderr(&output),
+        registry.keys()
+    );
     let combined = format!("{}{}", stdout(&output), stderr(&output));
     assert!(!combined.contains("user:secret"), "{combined}");
     assert!(!combined.contains(basic), "{combined}");
@@ -537,6 +557,12 @@ fn authenticated_cli_token_is_tried_before_file() {
         perms.set_mode(0o755);
         std::fs::set_permissions(&gh, perms).unwrap();
     }
+    // Windows resolves `gh` via PATHEXT; a shebang script is not executable there.
+    std::fs::write(
+        bin.join("gh.cmd"),
+        "@echo off\r\nif \"%~1\"==\"auth\" if \"%~2\"==\"token\" (\r\n  echo ghs_from_cli_not_file\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n",
+    )
+    .expect("write gh.cmd");
 
     let secret_file = "ghs_from_file_should_lose";
     let forge = AuthForge::new(&[(
