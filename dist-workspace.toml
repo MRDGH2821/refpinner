@@ -31,5 +31,10 @@ targets = [
   "x86_64-pc-windows-msvc"
 ]
 
+# Skip messense/cargo-xwin (Rust 1.89) — build Win ARM natively
+[dist.github-custom-runners.aarch64-pc-windows-msvc]
+host = "aarch64-pc-windows-msvc"
+runner = "windows-11-arm"
+
 [workspace]
 members = ["cargo:."]
