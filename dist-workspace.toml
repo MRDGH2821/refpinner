@@ -17,6 +17,8 @@ installers = ["shell", "powershell"]
 # Sign a packslip after the GitHub Release is announced
 # (https://packslip.dev/docs/publishing/)
 post-announce-jobs = ["./packslip"]
+# Build + upload artifacts on PRs (no GitHub Release publish)
+pr-run-mode = "upload"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = [
   "aarch64-apple-darwin",
