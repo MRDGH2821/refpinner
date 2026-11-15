@@ -328,10 +328,10 @@ url = "https://github.com/cocogitto/cocogitto/releases/download/7.0.0/cocogitto-
 url_api = "https://api.github.com/repos/cocogitto/cocogitto/releases/assets/366659399"
 
 [[tools.cspell]]
-version = "10.4.1"
-aube = { path = "locks/cspell/10.4.1", digest = "sha256:2f85ebdcb49e757a6e8c3f04295411004a8c18a7cc9f87a062aacfa4ec51b392" }
+version = "10.5.0"
+aube = { path = "locks/cspell/10.5.0", digest = "sha256:73a109d9bb5be5e581c7e4eeef2abc4e993cb5084348e13bbb91f95384183d83" }
 backend = "npm:cspell"
-specifiers = ["10.4.1"]
+specifiers = ["10.5.0"]
 
 [[tools.editorconfig-checker]]
 version = "4.0.2"
