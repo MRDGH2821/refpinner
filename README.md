@@ -37,6 +37,14 @@ Local `./` and `$/` references need no pin.
 Dynamic references and YAML anchors or aliases retain the existing warning and safe-write rules.
 The tool does not fetch remote workflows for recursive inspection.
 
+## Releases
+
+Multi-platform binaries ship via [cargo-dist](https://axodotdev.github.io/cargo-dist/) (`.github/workflows/release.yml`).
+Push a version tag such as `v0.1.0` to build archives, shell/PowerShell installers, and a GitHub Release.
+After announce, [packslip](https://packslip.dev/) signs `packslip.sigstore.json` so installers can verify downloads (`packslip install github.com/MRDGH2821/refpinner`).
+
+Config lives in `dist-workspace.toml`. The release workflow is marked `allow-dirty = ["ci"]` so the same-repo reusable workflow path stays `./.github/workflows/packslip.yml`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, checks, and the contribution workflow.
