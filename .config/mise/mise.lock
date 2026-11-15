@@ -251,6 +251,77 @@ url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x
 checksum = "sha256:0f20ce6674d4f2dbcc8c5d59fdf99f7ba45f8c3b367e0f5781cbfa30a1c78d99"
 url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64-baseline.zip"
 
+[[tools.cargo-dist]]
+version = "0.34.0"
+backend = "aqua:axodotdev/cargo-dist"
+specifiers = ["latest"]
+
+[tools.cargo-dist."platforms.linux-arm64"]
+checksum = "sha256:58efb33edf01342875bfd0c3ce2befa9d73075579ca1b3e5dd75b98c88f92e83"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-aarch64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690547"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.linux-arm64-musl"]
+checksum = "sha256:aac7d48901f5283b53e136dd0498782c88a3350dfa4a5e88f4c3e0ba7e486eea"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-aarch64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690545"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.linux-x64"]
+checksum = "sha256:7fee44ff3ff71ed0064b32d4ec62fee6b58bd37c5887b12a86aedddc5af0c7b5"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690609"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.linux-x64-baseline"]
+checksum = "sha256:7fee44ff3ff71ed0064b32d4ec62fee6b58bd37c5887b12a86aedddc5af0c7b5"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690609"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.linux-x64-musl"]
+checksum = "sha256:f274b9889e93333a52cdcab86b93ab04b875b8ef4eebc7f8589514e0aff827e6"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690624"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:f274b9889e93333a52cdcab86b93ab04b875b8ef4eebc7f8589514e0aff827e6"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690624"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.macos-arm64"]
+checksum = "sha256:d1eec30e63eed23e5a5bd48fe96eae314799811bffca254ec1d2264638ba1890"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-aarch64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690549"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.macos-x64"]
+checksum = "sha256:6aa89bb1e7c18f51ae8b148ce2fc6ab00ac46ed8173d4f2ed9afa12101218773"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690592"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.macos-x64-baseline"]
+checksum = "sha256:6aa89bb1e7c18f51ae8b148ce2fc6ab00ac46ed8173d4f2ed9afa12101218773"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690592"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.windows-x64"]
+checksum = "sha256:7bb53fbc998321f77a3bbb044084a52747c8ed041cf6d6a604802aa57b9c80c6"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690601"
+provenance = "github-attestations"
+
+[tools.cargo-dist."platforms.windows-x64-baseline"]
+checksum = "sha256:7bb53fbc998321f77a3bbb044084a52747c8ed041cf6d6a604802aa57b9c80c6"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/axodotdev/cargo-dist/releases/assets/700690601"
+provenance = "github-attestations"
+
 [[tools."cargo:cargo-edit"]]
 version = "0.13.14"
 backend = "cargo:cargo-edit"
