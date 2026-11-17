@@ -595,11 +595,11 @@ fn authenticated_cli_token_is_tried_before_file() {
     )
     .expect("write");
 
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let mut path_dirs = vec![bin.clone()];
+    path_dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(path_dirs).expect("join PATH");
     let mut command = Command::new(env!("CARGO_BIN_EXE_refpinner"));
     command
         .args(["pin"])
