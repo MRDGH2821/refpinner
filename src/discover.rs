@@ -383,7 +383,9 @@ fn configured_files(file: &crate::config::File) -> io::Result<(Vec<PathBuf>, Vec
     let mut wildcard = false;
     for component in file.path.components() {
         let part = component.as_os_str();
-        if part.to_string_lossy().contains(['*', '?', '[', '{']) {
+        if matches!(component, Component::Normal(_))
+            && part.to_string_lossy().contains(['*', '?', '[', '{'])
+        {
             wildcard = true;
         }
         if wildcard {
