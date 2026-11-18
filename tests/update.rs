@@ -108,6 +108,57 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn interactive_update_lists_all_files_before_applying_selection() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let original = format!("jobs:\n  a:\n    steps:\n      - uses: owner/tool@{OLD} # v4.2.1\n");
+    let root = project(
+        "interactive-list",
+        &[
+            (".github/workflows/a.yml", &original),
+            (".github/workflows/b.yml", &original),
+        ],
+    );
+    let forge = Forge::new(&tool());
+    let command = format!("{} update --write", env!("CARGO_BIN_EXE_refpinner"));
+    let mut child = Command::new("script")
+        .args(["-qec", &command, "/dev/null"])
+        .current_dir(&root)
+        .env("REFPINNER_GITHUB_API_URL", &forge.url)
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start terminal");
+    child.stdin.take().unwrap().write_all(b"99\n2\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let text = stdout(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("1. .github/workflows/a.yml"), "{text}");
+    assert!(text.contains("2. .github/workflows/b.yml"), "{text}");
+    assert!(text.contains("Enter valid update numbers"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".github/workflows/a.yml")).unwrap(),
+        original
+    );
+    assert!(
+        std::fs::read_to_string(root.join(".github/workflows/b.yml"))
+            .unwrap()
+            .contains("v4.10.0")
+    );
+    assert!(!root.join(".github/workflows/a.yml.bkp").exists());
+    assert!(root.join(".github/workflows/b.yml.bkp").exists());
+}
+
 /// Tag routes with the current tag at OLD and each candidate at a different commit.
 fn versions(current: &str, candidates: &[&str]) -> Forge {
     let mut routes = Vec::new();

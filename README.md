@@ -31,6 +31,9 @@ refpinner update --forgejo-instance https://codeberg.org --forgejo-action-source
 ```
 
 `pin` and `update` preview changes unless you pass `--write`.
+When you run `update --write` in a terminal, refpinner lists all available updates.
+Enter update numbers separated by spaces or commas, `all`, or `none`.
+When standard input is not a terminal, `update --write` applies all available updates.
 Writes preserve the original reference form, comments, quotes, and line endings, with numbered backups.
 Version annotations and update limits follow the same rules as GitHub references.
 Local `./` and `$/` references need no pin.
