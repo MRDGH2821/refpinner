@@ -31,6 +31,9 @@ refpinner update --forgejo-instance https://codeberg.org --forgejo-action-source
 ```
 
 `pin` and `update` preview changes unless you pass `--write`.
+When you run `update --write` in a terminal, refpinner lists all available updates.
+Enter update numbers separated by spaces or commas, `all`, or `none`.
+When standard input is not a terminal, `update --write` applies all available updates.
 Writes preserve the original reference form, comments, quotes, and line endings, with numbered backups.
 Version annotations and update limits follow the same rules as GitHub references.
 Local `./` and `$/` references need no pin.
@@ -95,8 +98,16 @@ forgejo_instance = "https://forgejo.example.org"
 forgejo_action_source = "self"
 ```
 
+For a configuration file inside `.config`, file paths start in the parent of `.config`.
+For other configuration files, file paths start in the configuration file's directory.
+Use a glob to select multiple files:
+
+```toml
+files = [{ path = ".gitlab/workflows/*.yml", platform = "gitlab" }]
+```
+
 Parents load in `extends` order. Later parents override earlier parents, and the child overrides all parents.
-Lists replace earlier lists, including an empty list. Paths in `extends` and `files` are relative to the file that declares them.
+Lists replace earlier lists, including an empty list. Paths in `extends` are relative to the file that declares them.
 File exclusion globs are relative to the project root. Reference and suppression patterns use glob syntax.
 Use `refpinner lint --include-excluded` to audit excluded files and references.
 Suppression hides warning output but does not make YAML aliases safe to edit.

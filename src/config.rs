@@ -255,6 +255,12 @@ impl Settings {
     }
 
     pub fn validate(&self, root: &Path) -> Result<(), String> {
+        for file in self.files.as_deref().unwrap_or_default() {
+            globset::GlobBuilder::new(&file.path.to_string_lossy())
+                .literal_separator(true)
+                .build()
+                .map_err(|_| "invalid file glob pattern")?;
+        }
         let mut excludes = ignore::overrides::OverrideBuilder::new(root);
         for pattern in self.exclude.as_deref().unwrap_or_default() {
             excludes
@@ -332,7 +338,7 @@ fn read(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Settings, String> {
     if stack.contains(&canonical) {
         return Err(format!("config inheritance cycle at {}", path.display()));
     }
-    stack.push(canonical);
+    stack.push(canonical.clone());
     let source = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read config {}: {error}", path.display()))?;
     // Parser errors can quote configuration values, including credentials.
@@ -347,8 +353,14 @@ fn read(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Settings, String> {
         result.merge(read(&folder.join(parent), stack)?);
     }
     if let Some(files) = &mut child.files {
+        let actual_folder = canonical.parent().unwrap_or(folder);
+        let base = actual_folder
+            .ancestors()
+            .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new(".config")))
+            .and_then(Path::parent)
+            .unwrap_or(actual_folder);
         for file in files {
-            file.path = folder.join(&file.path);
+            file.path = base.join(&file.path);
         }
     }
     result.merge(child);
