@@ -1,0 +1,50 @@
+version = 1
+revision = 5
+requires-python = ">=3.11"
+
+[options]
+exclude-newer = "2026-11-17T00:34:23.179306661Z"
+
+[[package]]
+name = "mise-pypi-tool-environment"
+version = "0.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "toml-sort" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "toml-sort", specifier = "==0.26.0" }]
+
+[[package]]
+name = "toml-sort"
+version = "0.26.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "tomlrt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/d5/674285a574e58b403bf16864187a71f9bcd800e3d9365a3f8904ba96feee/toml_sort-0.26.0.tar.gz", hash = "sha256:817472aa1f1aff3d8897db694022e070879ca71cc95ae1216604d00f355c2e8d", size = 13385, upload-time = "2026-11-14T23:14:44.383Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/74/2c3efe9387a9b33c99f789fb6e5776426ed575fb809dd4dade905879fcd7/toml_sort-0.26.0-py3-none-any.whl", hash = "sha256:03090d3d1a3e2c059059090e5be4a6d040ecb070ee44f02f3f44a1dc84a9cde0", size = 12727, upload-time = "2026-11-14T23:14:45.367Z" },
+]
+
+[[package]]
+name = "tomlrt"
+version = "2.3.3"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/72/76/d79f58d95f40b0a2fe66a34b770f9dbbba808457627d03b21af3a98f3e67/tomlrt-2.3.3.tar.gz", hash = "sha256:36782cf6821cd1962f34a548c2023984e4a60e32f286c36d7dc1430b77ac59ba", size = 137213, upload-time = "2026-10-31T13:41:48.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/f7/e95278e99677fdc69ecfde788ee6fc8d7309ac5e9e8805d1af2fa8e0debe/tomlrt-2.3.3-py3-none-any.whl", hash = "sha256:40a4c27d11566f1746673dd1693fec4f31d7f2e45a22483ec93d9a3a8554f63e", size = 149808, upload-time = "2026-10-31T13:41:47.303Z" },
+]
+
+[[package]]
+name = "typing-extensions"
+version = "4.16.0"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
+]
