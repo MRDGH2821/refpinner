@@ -109,7 +109,8 @@ fn refpinner(dir: &Path, registry: &Registry, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("REFPINNER_REGISTRY_URL", &registry.url)
-        .env("REFPINNER_GITHUB_API_URL", &registry.url);
+        .env("REFPINNER_GITHUB_API_URL", &registry.url)
+        .env("DOCKER_CONFIG", dir.join("empty-docker-config"));
     for proxy in [
         "HTTP_PROXY",
         "HTTPS_PROXY",

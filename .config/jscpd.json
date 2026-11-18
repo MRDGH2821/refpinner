@@ -20,7 +20,8 @@
     "go.sum",
     "npm-shrinkwrap.json",
     "package-lock.json",
-    "pnpm-lock.yaml"
+    "pnpm-lock.yaml",
+    "tests/**"
   ],
   "reporters": ["html", "markdown"],
   "threshold": 0

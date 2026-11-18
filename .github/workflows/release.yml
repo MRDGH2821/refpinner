@@ -59,15 +59,21 @@ jobs:
           merge-multiple: true
           path: target/distrib/
           pattern: artifacts-*
-      - id: cargo-dist
+      - env:
+          TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+        id: cargo-dist
         run: |
-          dist build ${{ needs.plan.outputs.tag-flag }} --output-format=json "--artifacts=global" > dist-manifest.json
+          tag_args=()
+          if [ -n "$TAG_FLAG" ]; then tag_args+=("$TAG_FLAG"); fi
+          dist build "${tag_args[@]}" --output-format=json "--artifacts=global" > dist-manifest.json
           echo "dist ran successfully"
 
           # Parse out what we just built and upload it to scratch storage
-          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          jq --raw-output ".upload_files[]" dist-manifest.json >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "paths<<EOF"
+            jq --raw-output ".upload_files[]" dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
         shell: bash
@@ -81,7 +87,6 @@ jobs:
 
   # Build and packages all the platform-specific things
   build-local-artifacts:
-    container: ${{ matrix.container && matrix.container.image || null }}
     env:
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,15 +104,14 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - if: ${{ matrix.container }}
-        name: Install Rust non-interactively if not already installed
-        run: |
-          if ! command -v cargo > /dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          fi
-      - name: Install dist
-        run: ${{ matrix.install_dist.run }}
+      - if: ${{ runner.os != 'Windows' }}
+        name: Install dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.sh | sh
+        shell: bash
+      - if: ${{ runner.os == 'Windows' }}
+        name: Install dist on Windows
+        run: irm https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.ps1 | iex
+        shell: pwsh
       # Get the dist-manifest
       - name: Fetch local artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -115,21 +119,32 @@ jobs:
           merge-multiple: true
           path: target/distrib/
           pattern: artifacts-*
-      - name: Install dependencies
+      - if: ${{ runner.os == 'Linux' && contains(join(matrix.targets, ','), 'musl') }}
+        name: Install dependencies
         run: |
-          ${{ matrix.packages_install }}
-      - name: Build artifacts
+          sudo apt-get update
+          sudo apt-get install musl-tools
+      - env:
+          DIST_ARGS: ${{ matrix.dist_args }}
+          TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+        name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
-          dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
+          read -r -a dist_args <<< "$DIST_ARGS"
+          tag_args=()
+          if [ -n "$TAG_FLAG" ]; then tag_args+=("$TAG_FLAG"); fi
+          dist build "${tag_args[@]}" --print=linkage --output-format=json "${dist_args[@]}" > dist-manifest.json
           echo "dist ran successfully"
+        shell: bash
       - id: cargo-dist
         name: Post-build
         run: |
           # Parse out what we just built and upload it to scratch storage
-          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "paths<<EOF"
+            dist print-upload-files-from-manifest --manifest dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
         # We force bash here just because github makes it really hard to get values up
@@ -165,7 +180,6 @@ jobs:
       attestations: write
       contents: write
       id-token: write
-    secrets: inherit
     # dist 0.34 emits `$/.github/...`; GitHub requires `./.github/...` for same-repo calls.
     uses: ./.github/workflows/packslip.yml
     with:
@@ -183,6 +197,8 @@ jobs:
       - build-global-artifacts
     outputs:
       val: ${{ steps.host.outputs.manifest }}
+    permissions:
+      contents: write
     runs-on: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,9 +218,13 @@ jobs:
           merge-multiple: true
           path: target/distrib/
           pattern: artifacts-*
-      - id: host
+      - env:
+          TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+        id: host
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
+          tag_args=()
+          if [ -n "$TAG_FLAG" ]; then tag_args+=("$TAG_FLAG"); fi
+          dist host "${tag_args[@]}" --steps=upload --steps=release --output-format=json > dist-manifest.json
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -231,12 +251,15 @@ jobs:
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
         name: Create GitHub Release
         run: |
           # Write and read notes from a file to avoid quoting breaking things
-          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
 
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          prerelease_args=()
+          if [ -n "$PRERELEASE_FLAG" ]; then prerelease_args+=("$PRERELEASE_FLAG"); fi
+          gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" "${prerelease_args[@]}" --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
@@ -247,6 +270,8 @@ jobs:
       tag: ${{ !github.event.pull_request && github.ref_name || '' }}
       tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
       val: ${{ steps.plan.outputs.manifest }}
+    permissions:
+      contents: write
     runs-on: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -268,9 +293,16 @@ jobs:
       # functionality based on whether this is a pull_request, and whether it's from a fork.
       # (PRs run on the *source* but secrets are usually on the *target* -- that's *good*
       # but also really annoying to build CI around when it needs secrets to work right.)
-      - id: plan
+      - env:
+          IS_PULL_REQUEST: ${{ !!github.event.pull_request }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        id: plan
         run: |
-          dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          if [ "$IS_PULL_REQUEST" = true ]; then
+            dist plan --output-format=json > plan-dist-manifest.json
+          else
+            dist host --steps=create "--tag=$RELEASE_TAG" --output-format=json > plan-dist-manifest.json
+          fi
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -309,4 +341,4 @@ on:
       - "**[0-9]+.[0-9]+.[0-9]+*"
 
 permissions:
-  "contents": "write"
+  "contents": "read"

@@ -124,7 +124,14 @@ impl Registry {
         url: &str,
         token: Option<&str>,
     ) -> Result<ureq::http::Response<ureq::Body>, String> {
-        let request = self.agent.get(url);
+        self.call(self.agent.get(url), token)
+    }
+
+    fn call(
+        &self,
+        request: ureq::RequestBuilder<ureq::typestate::WithoutBody>,
+        token: Option<&str>,
+    ) -> Result<ureq::http::Response<ureq::Body>, String> {
         let request = match token {
             Some(token) => request.header("Authorization", format!("Bearer {token}")),
             None => request,
@@ -191,14 +198,7 @@ impl Registry {
         } else {
             self.agent.get(url)
         };
-        let request = request.header("Accept", ACCEPT);
-        let request = match token {
-            Some(token) => request.header("Authorization", format!("Bearer {token}")),
-            None => request,
-        };
-        request
-            .call()
-            .map_err(|error| format!("cannot reach registry: {error}"))
+        self.call(request.header("Accept", ACCEPT), token)
     }
 
     /// Gets a Bearer token from the realm named by a challenge.
