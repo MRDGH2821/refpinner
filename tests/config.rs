@@ -112,6 +112,74 @@ fn configured_custom_gitlab_file_uses_gitlab_parser() {
 }
 
 #[test]
+fn configured_globs_select_gitlab_files_and_explicit_paths() {
+    let root = tree(
+        "file-patterns",
+        &[
+            (
+                ".config/refpinner.toml",
+                "files = [{ path = '.gitlab/workflows/*.yml', platform = 'gitlab' }, { path = 'ci/**/*.yaml', platform = 'gitlab' }]\n",
+            ),
+            (".gitlab/workflows/a.yml", "image: alpine:1\n"),
+            (".gitlab/workflows/b.yml", "image: node:2\n"),
+            (".gitlab/workflows/ignored.yml.bkp", "image: backup:1\n"),
+            ("ci/nested/c.yaml", "image: ruby:3\n"),
+            ("ci/nested/ignored.txt", "image: bad:1\n"),
+        ],
+    );
+    let output = lint(&root, &["--platform", "gitlab"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        text.contains("alpine:1") && text.contains("node:2") && text.contains("ruby:3"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("backup:1") && !text.contains("bad:1"),
+        "{text}"
+    );
+    let output = lint(&root, &[".gitlab/workflows/a.yml", "--platform", "gitlab"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stdout(&output).contains("alpine:1"));
+    assert!(!stdout(&output).contains("node:2"));
+}
+
+#[test]
+fn invalid_file_glob_is_rejected_during_config_validation() {
+    let root = tree(
+        "bad-file-glob",
+        &[(
+            "refpinner.toml",
+            "files = [{ path = '[', platform = 'gitlab' }]\n",
+        )],
+    );
+    let output = refpinner(&root, &[], &["config", "validate"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("invalid file glob pattern"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn file_paths_in_nested_config_directory_start_at_project_root() {
+    let root = tree(
+        "nested-config-file-path",
+        &[
+            (
+                ".config/refpinner/config.toml",
+                "files = [{ path = 'ci/*.yml', platform = 'gitlab' }]\n",
+            ),
+            ("ci/build.yml", "image: alpine:1\n"),
+        ],
+    );
+    let output = lint(&root, &["--platform", "gitlab"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stdout(&output).contains("unpinned alpine:1"));
+}
+
+#[test]
 fn search_selects_the_first_existing_configuration_file() {
     let names = [
         "refpinner.toml",

@@ -156,13 +156,29 @@ impl Scan {
                     platform: platform(file),
                 });
             }
-            if self.files.is_empty() {
+            {
                 for file in settings.files.as_deref().unwrap_or_default() {
-                    let (paths, skips) = explicit(std::slice::from_ref(&file.path));
+                    let (paths, skips) = configured_files(file)?;
                     warnings.extend(skips);
                     for path in paths {
                         let path = path.canonicalize().unwrap_or(path);
-                        selected.retain(|input| input.path != path);
+                        if !self.files.is_empty()
+                            && !candidates.iter().any(|candidate| {
+                                candidate
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| candidate.clone())
+                                    == path
+                            })
+                        {
+                            continue;
+                        }
+                        selected.retain(|input| {
+                            input
+                                .path
+                                .canonicalize()
+                                .unwrap_or_else(|_| input.path.clone())
+                                != path
+                        });
                         selected.push(Input {
                             path,
                             settings: settings.clone(),
@@ -359,6 +375,55 @@ fn explicit(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<Skip>) {
     }
     selected.sort();
     (selected, warnings)
+}
+
+fn configured_files(file: &crate::config::File) -> io::Result<(Vec<PathBuf>, Vec<Skip>)> {
+    let mut base = PathBuf::new();
+    let mut pattern = PathBuf::new();
+    let mut wildcard = false;
+    for component in file.path.components() {
+        let part = component.as_os_str();
+        // A Windows verbatim prefix contains `?` but is not a glob.
+        if matches!(component, Component::Normal(_))
+            && part.to_string_lossy().contains(['*', '?', '[', '{'])
+        {
+            wildcard = true;
+        }
+        if wildcard {
+            pattern.push(part);
+        } else {
+            base.push(part);
+        }
+    }
+    if !wildcard {
+        return Ok(explicit(std::slice::from_ref(&file.path)));
+    }
+    let glob = globset::GlobBuilder::new(&pattern.to_string_lossy())
+        .literal_separator(true)
+        .build()
+        .map_err(io::Error::other)?
+        .compile_matcher();
+    let mut paths = Vec::new();
+    let mut warnings = Vec::new();
+    let walk = WalkBuilder::new(&base)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walk {
+        let entry = entry.map_err(io::Error::other)?;
+        let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path());
+        if !glob.is_match(relative) {
+            continue;
+        }
+        let (selected, skips) = explicit(&[entry.into_path()]);
+        warnings.extend(skips);
+        paths.extend(selected.into_iter().filter(|path| path.is_file()));
+    }
+    paths.sort();
+    Ok((paths, warnings))
 }
 
 /// Reports whether the folder holding `file` is a project: it has Git metadata (a `.git`
