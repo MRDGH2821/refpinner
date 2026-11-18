@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file. See [conven
 
 ---
 
+## [0.1.1](https://github.com/MRDGH2821/refpinner/compare/v0.1.0..v0.1.1) - 2026-11-18
+
+### Bug Fixes
+
+- **(github)** isolate rust CI test credentials - ([8f7b9f7](https://github.com/MRDGH2821/refpinner/commit/8f7b9f714448614b5b4901a2422d146ff24f8e2e)) - MRDGH2821
+- **(github)** harden release workflow - ([493ffca](https://github.com/MRDGH2821/refpinner/commit/493ffca775ebcd7455ac2393c6fa497145ad1fc4)) - MRDGH2821
+- **(jscpd)** clear copy-paste clones in src and skip tests - ([d130b86](https://github.com/MRDGH2821/refpinner/commit/d130b864495b43a8262802c053500095a3cdb521)) - MRDGH2821
+- isolate credentials CI flakes on Ubuntu and Windows - ([cd789ff](https://github.com/MRDGH2821/refpinner/commit/cd789ff921465c7a2e3dfa209fb376faa6e45d5b)) - MRDGH2821
+- join PATH with platform separator in credentials test - ([43b749b](https://github.com/MRDGH2821/refpinner/commit/43b749bc4cf9203971c96ac1ed3721e0b7569c05)) - MRDGH2821
+
+### Miscellaneous Chores
+
+- **(copier)** update template - ([55d84be](https://github.com/MRDGH2821/refpinner/commit/55d84bece9cebe2ff20fd6bde1aab2d8971584ab)) - MRDGH2821
+- merge pull request #21 from MRDGH2821/chore/ci-release-fix - ([b8b2e72](https://github.com/MRDGH2821/refpinner/commit/b8b2e72999d467de69856e45cce2ecba67a8b0f4)) - Mihir Rabade
+- merge pull request #24 from MRDGH2821/MRDGH2821/fix/rust-ci-tests - ([ebcf040](https://github.com/MRDGH2821/refpinner/commit/ebcf040e04d1013c7420ebaab8905cfd826dc166)) - Mihir Rabade
+
+### Build
+
+- **(mise)** add cargo-dist - ([ce6b54c](https://github.com/MRDGH2821/refpinner/commit/ce6b54c9a19bb90c9031dda071215583e0130430)) - MRDGH2821
+- **(mise)** add cargo-xwin and clang for Windows cross builds - ([8b31089](https://github.com/MRDGH2821/refpinner/commit/8b31089b2255af95c98dfac8c77d58f94bad76c3)) - MRDGH2821
+- **(mise)** update versions & lockfiles - ([b4327d5](https://github.com/MRDGH2821/refpinner/commit/b4327d5ffed8597b8e72629d5a8b64b61139a321)) - MRDGH2821
+
+### Ci
+
+- **(github)** enable dist PR artifact uploads - ([2523244](https://github.com/MRDGH2821/refpinner/commit/2523244ba0e4087eff8fa932ece7f689e35bdd67)) - MRDGH2821
+- **(github)** build Win ARM on windows-11-arm - ([6451df1](https://github.com/MRDGH2821/refpinner/commit/6451df1429ce50b4b42f77b81efee4d0927536c9)) - MRDGH2821
+- update versions - ([d5dbbf6](https://github.com/MRDGH2821/refpinner/commit/d5dbbf65ecfc8a5da5631aa16503eff9fef19116)) - MRDGH2821
+
+---
+
 ## [0.1.0] - 2026-11-15
 
 ### Bug Fixes
