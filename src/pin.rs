@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::discover::Scan;
@@ -24,6 +25,13 @@ pub struct Change {
     pub edits: Vec<Edit>,
     /// The reference's new value, which the write checks the edited file holds.
     pub value: String,
+}
+
+struct PendingFile {
+    path: PathBuf,
+    shown: String,
+    source: String,
+    changes: Vec<(usize, write::Value, Vec<Edit>)>,
 }
 
 /// Previews pins for the unpinned references in the files selected by `scan`.
@@ -81,6 +89,9 @@ pub fn apply(
         println!("{}: warning: {}", skip.path, skip.message);
     }
     let interactive = write && io::stdin().is_terminal();
+    let select_updates = interactive && noun == "update";
+    let mut pending = Vec::new();
+    let mut options = Vec::new();
     let mut status = OK;
     for input in discovery.files {
         let file = &input.path;
@@ -106,6 +117,7 @@ pub fn apply(
             .any(|r| r.state == State::Warning && r.text.starts_with("unsupported YAML "));
         let mut chosen = Vec::new();
         let mut values = Vec::new();
+        let mut changes = Vec::new();
         for reference in &references {
             if !input.settings.includes(reference, scan.include_excluded) {
                 continue;
@@ -134,7 +146,7 @@ pub fn apply(
                         header = format!("{header}: {}", change.summary);
                     }
                     preview(&header, &source, reference, &change.edits);
-                    if write && (!interactive || confirm(noun)) {
+                    if write && (select_updates || !interactive || confirm(noun)) {
                         let value = if reference.kind == crate::reference::Kind::GitLab
                             && !reference.text.contains('@')
                         {
@@ -142,8 +154,13 @@ pub fn apply(
                         } else {
                             write::Value::Scalar(reference.line, reference.column, change.value)
                         };
-                        values.push(value);
-                        chosen.extend(change.edits);
+                        if select_updates {
+                            options.push(header);
+                            changes.push((options.len(), value, change.edits));
+                        } else {
+                            values.push(value);
+                            chosen.extend(change.edits);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -152,6 +169,15 @@ pub fn apply(
                     status = ERROR;
                 }
             }
+        }
+        if select_updates && !changes.is_empty() {
+            pending.push(PendingFile {
+                path: file.clone(),
+                shown,
+                source,
+                changes,
+            });
+            continue;
         }
         if chosen.is_empty() {
             continue;
@@ -167,7 +193,69 @@ pub fn apply(
             }
         }
     }
+    if !options.is_empty() {
+        let selected = select(&options);
+        for file in pending {
+            let mut edits = Vec::new();
+            let mut values = Vec::new();
+            for (number, value, change) in file.changes {
+                if selected.contains(&number) {
+                    values.push(value);
+                    edits.extend(change);
+                }
+            }
+            if edits.is_empty() {
+                continue;
+            }
+            match write::replace(&file.path, &file.source, &edits, &values) {
+                Ok(backup) => println!(
+                    "wrote {} (backup {})",
+                    file.shown,
+                    display(backup.strip_prefix(root).unwrap_or(&backup))
+                ),
+                Err(error) => {
+                    eprintln!("refpinner: {}: not written: {error}", file.shown);
+                    status = ERROR;
+                }
+            }
+        }
+    }
     ExitCode::from(status)
+}
+
+fn select(options: &[String]) -> Vec<usize> {
+    eprintln!("Available updates:");
+    for (index, option) in options.iter().enumerate() {
+        eprintln!("  {}. {option}", index + 1);
+    }
+    loop {
+        eprint!("Select updates (numbers separated by spaces, all, or none) [none]: ");
+        let _ = io::stderr().flush();
+        let mut answer = String::new();
+        if io::stdin().lock().read_line(&mut answer).unwrap_or(0) == 0 {
+            return Vec::new();
+        }
+        let answer = answer.trim();
+        if answer.is_empty() || answer.eq_ignore_ascii_case("none") {
+            return Vec::new();
+        }
+        if answer.eq_ignore_ascii_case("all") {
+            return (1..=options.len()).collect();
+        }
+        let numbers: Option<Vec<usize>> = answer
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse::<usize>()
+                    .ok()
+                    .filter(|n| (1..=options.len()).contains(n))
+            })
+            .collect();
+        if let Some(numbers) = numbers.filter(|n| !n.is_empty()) {
+            return numbers;
+        }
+        eprintln!("Enter valid update numbers, all, or none.");
+    }
 }
 
 /// Asks whether to apply the `noun` just previewed; anything but `y` or `yes` declines.
