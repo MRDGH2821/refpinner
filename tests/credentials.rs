@@ -544,25 +544,37 @@ fn authenticated_cli_token_is_tried_before_file() {
         .join("fake-cli-bin");
     let _ = std::fs::remove_dir_all(&bin);
     std::fs::create_dir_all(&bin).expect("mkdir");
-    let gh = bin.join("gh");
-    std::fs::write(
-        &gh,
-        "#!/bin/sh\n# fake gh for credential tests\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then\n  echo 'ghs_from_cli_not_file'\n  exit 0\nfi\nexit 1\n",
-    )
-    .expect("write gh");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let gh = bin.join("gh");
+        std::fs::write(
+            &gh,
+            "#!/bin/sh\n# fake gh for credential tests\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then\n  echo 'ghs_from_cli_not_file'\n  exit 0\nfi\nexit 1\n",
+        )
+        .expect("write gh");
         let mut perms = std::fs::metadata(&gh).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&gh, perms).unwrap();
     }
-    // Windows resolves `gh` via PATHEXT; a shebang script is not executable there.
-    std::fs::write(
-        bin.join("gh.cmd"),
-        "@echo off\r\nif \"%~1\"==\"auth\" if \"%~2\"==\"token\" (\r\n  echo ghs_from_cli_not_file\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n",
-    )
-    .expect("write gh.cmd");
+    #[cfg(windows)]
+    {
+        let source = bin.join("gh.rs");
+        std::fs::write(
+            &source,
+            "fn main() { let args: Vec<_> = std::env::args().collect(); if args.get(1).map(String::as_str) == Some(\"auth\") && args.get(2).map(String::as_str) == Some(\"token\") { println!(\"ghs_from_cli_not_file\"); } else { std::process::exit(1); } }\n",
+        )
+        .expect("write fake gh source");
+        assert!(
+            Command::new("rustc")
+                .arg(&source)
+                .arg("-o")
+                .arg(bin.join("gh.exe"))
+                .status()
+                .expect("compile fake gh")
+                .success()
+        );
+    }
 
     let secret_file = "ghs_from_file_should_lose";
     let forge = AuthForge::new(&[(
