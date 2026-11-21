@@ -354,11 +354,21 @@ fn read(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Settings, String> {
     }
     if let Some(files) = &mut child.files {
         let actual_folder = canonical.parent().unwrap_or(folder);
-        let base = actual_folder
-            .ancestors()
-            .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new(".config")))
-            .and_then(Path::parent)
-            .unwrap_or(actual_folder);
+        let dot_config = std::ffi::OsStr::new(".config");
+        // Only the project's own `.config/` (or `.config/refpinner/`) layout remaps
+        // file paths to the project root — never a `.config` ancestor higher up.
+        let base = if actual_folder.file_name() == Some(dot_config) {
+            actual_folder.parent().unwrap_or(actual_folder)
+        } else if actual_folder.file_name() == Some(std::ffi::OsStr::new("refpinner"))
+            && actual_folder.parent().and_then(Path::file_name) == Some(dot_config)
+        {
+            actual_folder
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or(actual_folder)
+        } else {
+            actual_folder
+        };
         for file in files {
             file.path = base.join(&file.path);
         }
