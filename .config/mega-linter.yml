@@ -41,6 +41,8 @@ POST_COMMANDS:
 PYTHON_DEFAULT_STYLE: ruff
 REPOSITORY_KINGFISHER_ARGUMENTS: --exclude node_modules --exclude apm_modules
 SHOW_ELAPSED_TIME: true
+# GitHub commit pages in CHANGELOG.md intermittently return 503 under CI load.
+SPELL_LYCHEE_ARGUMENTS: --exclude "^https://github\\.com/.+/commit/"
 TYPESCRIPT_DEFAULT_STYLE: prettier
 YAML_PRETTIER_PRE_COMMANDS:
   - command: npm i -g bun
