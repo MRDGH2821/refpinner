@@ -114,7 +114,7 @@ impl Releases {
 }
 
 /// How far an update may move from the current version.
-#[derive(Clone, Copy, PartialEq, serde::Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Limit {
     /// Any higher version.

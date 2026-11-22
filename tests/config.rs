@@ -180,6 +180,38 @@ fn file_paths_in_nested_config_directory_start_at_project_root() {
 }
 
 #[test]
+fn file_paths_start_at_project_root_even_when_project_is_inside_a_dot_config_directory() {
+    // Regression: a project whose canonical path contains a `.config` ancestor (e.g. the project
+    // lives at `/some/.config/proj/`) must not have its configured file paths re-rooted at
+    // the wrong ancestor. When the config file itself is NOT inside a `.config/` subdirectory of
+    // the project, paths must be relative to the config file's own directory.
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("config")
+        .join("project-inside-dot-config");
+    let root = outer.join(".config").join("proj");
+    let _ = std::fs::remove_dir_all(&outer);
+    std::fs::create_dir_all(root.join(".github").join("workflows")).expect("create dirs");
+    std::fs::write(
+        root.join("refpinner.toml"),
+        "files = [{ path = '.github/workflows/ci.yml', platform = 'github' }]\n",
+    )
+    .expect("write config");
+    std::fs::write(
+        root.join(".github").join("workflows").join("ci.yml"),
+        "jobs:\n  build:\n    steps:\n      - uses: owner/repo@v1\n",
+    )
+    .expect("write workflow");
+    let output = lint(&root, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("unpinned owner/repo@v1"),
+        "configured file not found; stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+#[test]
 fn search_selects_the_first_existing_configuration_file() {
     let names = [
         "refpinner.toml",
@@ -377,6 +409,28 @@ fn validation_is_offline_and_rejects_invalid_inheritance_before_writes() {
     );
     let output = refpinner(&root, &[], &["config", "validate"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}
+
+#[test]
+fn invalid_config_fields_are_rejected_without_exposing_values() {
+    for (name, config) in [
+        ("unknown-field", "unexpected = \"secret-value\"\n"),
+        ("invalid-type", "exclude = \"secret-value\"\n"),
+        (
+            "nested-field",
+            "files = [{ path = \"secret-value\", platform = \"github\", extra = true }]\n",
+        ),
+    ] {
+        let root = tree(name, &[("refpinner.toml", config)]);
+        let output = refpinner(&root, &[], &["config", "validate"]);
+        assert_eq!(output.status.code(), Some(2), "{name}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("invalid config"),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("secret-value"));
+    }
 }
 
 #[test]

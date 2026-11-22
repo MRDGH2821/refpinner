@@ -13,7 +13,7 @@ const NAMES: [&str; 5] = [
     ".config/refpinner/config.toml",
 ];
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, schematic::Config)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
@@ -30,7 +30,7 @@ pub struct Settings {
     pub forgejo_action_source: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReferenceRule {
     pattern: String,
@@ -39,7 +39,7 @@ pub struct ReferenceRule {
     update_limit: Option<crate::version::Limit>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VersionRule {
     pattern: String,
@@ -159,14 +159,14 @@ fn parts_from_captures(captures: &[(String, String)]) -> Option<TagParts> {
     })
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct File {
     pub path: PathBuf,
     pub platform: Platform,
 }
 
-#[derive(Clone, Copy, Deserialize, clap::ValueEnum, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, clap::ValueEnum, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
     Github,
@@ -342,8 +342,14 @@ fn read(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Settings, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read config {}: {error}", path.display()))?;
     // Parser errors can quote configuration values, including credentials.
-    let mut child: Settings =
-        toml::from_str(&source).map_err(|_| format!("invalid config {}", path.display()))?;
+    let mut loader = schematic::ConfigLoader::<Settings>::new();
+    loader
+        .code(source, "config.toml")
+        .map_err(|_| format!("invalid config {}", path.display()))?;
+    let mut child = loader
+        .load()
+        .map_err(|_| format!("invalid config {}", path.display()))?
+        .config;
     let folder = path.parent().unwrap_or(Path::new("."));
     child
         .validate(folder)
@@ -354,11 +360,21 @@ fn read(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Settings, String> {
     }
     if let Some(files) = &mut child.files {
         let actual_folder = canonical.parent().unwrap_or(folder);
-        let base = actual_folder
-            .ancestors()
-            .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new(".config")))
-            .and_then(Path::parent)
-            .unwrap_or(actual_folder);
+        let dot_config = std::ffi::OsStr::new(".config");
+        // Only the project's own `.config/` (or `.config/refpinner/`) layout remaps
+        // file paths to the project root — never a `.config` ancestor higher up.
+        let base = if actual_folder.file_name() == Some(dot_config) {
+            actual_folder.parent().unwrap_or(actual_folder)
+        } else if actual_folder.file_name() == Some(std::ffi::OsStr::new("refpinner"))
+            && actual_folder.parent().and_then(Path::file_name) == Some(dot_config)
+        {
+            actual_folder
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or(actual_folder)
+        } else {
+            actual_folder
+        };
         for file in files {
             file.path = base.join(&file.path);
         }
