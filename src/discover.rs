@@ -7,7 +7,7 @@ use ignore::overrides::OverrideBuilder;
 
 use crate::lint::display;
 
-/// GitLab's default CI file name; custom CI file paths are not discovered.
+/// GitLab's default CI file name; other paths are selected only when supplied or recognized by content.
 pub const GITLAB_CI: &str = ".gitlab-ci.yml";
 
 /// Project folders deeper than this many levels below the scan path are not discovered (ADR 0001).
@@ -65,9 +65,19 @@ impl Scan {
     /// Validates every project's configuration before returning any files to a writer.
     /// Collects skip warnings for symlinks and explicitly supplied backups.
     pub fn files(&self) -> io::Result<Discovery> {
-        let root = self.path.canonicalize()?;
+        let path = self.path.canonicalize()?;
+        // `--path` may name a single CI file; treat it like an explicit file argument.
+        let (root, supplied) = if self.files.is_empty() && path.is_file() {
+            let parent = path
+                .parent()
+                .ok_or_else(|| io::Error::other("CI file path has no parent directory"))?;
+            (parent.to_path_buf(), vec![path])
+        } else {
+            (path, self.files.clone())
+        };
+        let explicit_only = !supplied.is_empty();
         let mut projects = vec![root.clone()];
-        if self.files.is_empty() {
+        if !explicit_only {
             let walk = WalkBuilder::new(&root)
                 .hidden(false)
                 .ignore(false)
@@ -93,7 +103,7 @@ impl Scan {
             configurations.push((project, settings));
         }
         let mut warnings = Vec::new();
-        let mut candidates = if self.files.is_empty() {
+        let mut candidates = if !explicit_only {
             discover(
                 &root,
                 &[],
@@ -108,11 +118,20 @@ impl Scan {
                 &mut warnings,
             )?
         } else {
-            let (files, skips) = explicit(&self.files);
+            let (files, skips) = explicit(&supplied);
             warnings.extend(skips);
-            files.into_iter().map(|file| root.join(file)).collect()
+            files
+                .into_iter()
+                .map(|file| {
+                    if file.is_absolute() {
+                        file
+                    } else {
+                        root.join(file)
+                    }
+                })
+                .collect()
         };
-        if self.files.is_empty() {
+        if !explicit_only {
             for (project, _) in &configurations {
                 if project.join(".git").symlink_metadata().is_ok() {
                     tracked_files(project, &root, &mut candidates)?;
@@ -141,10 +160,10 @@ impl Scan {
             }
             let matcher = builder.build().map_err(io::Error::other)?;
             for file in &candidates {
-                if self.files.is_empty() && project_for(&root, file) != project {
+                if !explicit_only && project_for(&root, file) != project {
                     continue;
                 }
-                if self.files.is_empty()
+                if !explicit_only
                     && !self.include_excluded
                     && excluded(&matcher, exclude_root, file)
                 {
@@ -162,7 +181,7 @@ impl Scan {
                     warnings.extend(skips);
                     for path in paths {
                         let path = path.canonicalize().unwrap_or(path);
-                        if !self.files.is_empty()
+                        if explicit_only
                             && !candidates.iter().any(|candidate| {
                                 candidate
                                     .canonicalize()
@@ -207,7 +226,24 @@ impl Scan {
 
 fn platform(file: &Path) -> crate::config::Platform {
     use crate::config::Platform;
-    if file.file_name() == Some(OsStr::new(GITLAB_CI)) {
+    if matches!(
+        file.file_name().and_then(OsStr::to_str),
+        Some(GITLAB_CI | ".gitlab-ci.yaml")
+    ) {
+        return Platform::Gitlab;
+    }
+    for component in file.components() {
+        match component.as_os_str().to_str() {
+            Some(".forgejo") => return Platform::Forgejo,
+            Some(".gitea") => return Platform::Gitea,
+            Some(".github") => return Platform::Github,
+            _ => {}
+        }
+    }
+    if std::fs::read_to_string(file)
+        .ok()
+        .is_some_and(|source| crate::gitlab::is_ci(&source))
+    {
         return Platform::Gitlab;
     }
     match crate::settings::platform(file) {
@@ -298,8 +334,9 @@ fn excluded(matcher: &ignore::overrides::Override, root: &Path, file: &Path) -> 
 
 /// Returns the recognized CI files of each project, sorted. A project is `root` or a folder up
 /// to two levels below it. Its CI files are `.github/workflows/*.{yml,yaml}`, the same under
-/// `.forgejo` and `.gitea`, `.gitlab-ci.yml`, and `action.{yml,yaml}` at the project root or
-/// anywhere under `.github/actions`.
+/// `.forgejo` and `.gitea`, `.gitlab-ci.y{a,}ml`, and `action.{yml,yaml}` at the project root or
+/// anywhere under `.github/actions`. Custom GitLab paths are not auto-discovered; supply them
+/// explicitly or via config so content-based classification can select them.
 ///
 /// Git ignore rules apply inside Git repositories, whether `.git` is a folder or a worktree
 /// file. Symlinks are never followed.
@@ -466,7 +503,10 @@ fn location(relative: &Path) -> Option<Location> {
         relative.file_name().and_then(OsStr::to_str),
         Some("action.yml" | "action.yaml")
     );
-    let gitlab = relative.file_name() == Some(OsStr::new(GITLAB_CI));
+    let gitlab = matches!(
+        relative.file_name().and_then(OsStr::to_str),
+        Some(GITLAB_CI | ".gitlab-ci.yaml")
+    );
     let Some(ci) = parts
         .iter()
         .position(|part| matches!(part.to_str(), Some(".github" | ".forgejo" | ".gitea")))
