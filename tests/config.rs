@@ -412,6 +412,28 @@ fn validation_is_offline_and_rejects_invalid_inheritance_before_writes() {
 }
 
 #[test]
+fn invalid_config_fields_are_rejected_without_exposing_values() {
+    for (name, config) in [
+        ("unknown-field", "unexpected = \"secret-value\"\n"),
+        ("invalid-type", "exclude = \"secret-value\"\n"),
+        (
+            "nested-field",
+            "files = [{ path = \"secret-value\", platform = \"github\", extra = true }]\n",
+        ),
+    ] {
+        let root = tree(name, &[("refpinner.toml", config)]);
+        let output = refpinner(&root, &[], &["config", "validate"]);
+        assert_eq!(output.status.code(), Some(2), "{name}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("invalid config"),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("secret-value"));
+    }
+}
+
+#[test]
 fn reference_rules_filter_lint_and_suppress_warnings_last_match_wins() {
     let source = concat!(
         "jobs:\n  a:\n    steps:\n",
