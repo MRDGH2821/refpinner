@@ -153,13 +153,7 @@ impl Scan {
             } else {
                 &root
             };
-            let mut builder = OverrideBuilder::new(exclude_root);
-            for pattern in excludes {
-                builder
-                    .add(&format!("!{pattern}"))
-                    .map_err(io::Error::other)?;
-            }
-            let matcher = builder.build().map_err(io::Error::other)?;
+            let matcher = exclusion_matcher(exclude_root, excludes)?;
             for file in &candidates {
                 if !explicit_only && project_for(&root, file) != project {
                     continue;
@@ -285,13 +279,7 @@ impl Scan {
             } else {
                 scan_root
             };
-            let mut builder = OverrideBuilder::new(exclude_root);
-            for pattern in excludes {
-                builder
-                    .add(&format!("!{pattern}"))
-                    .map_err(io::Error::other)?;
-            }
-            let matcher = builder.build().map_err(io::Error::other)?;
+            let matcher = exclusion_matcher(exclude_root, excludes)?;
             let Ok(source) = std::fs::read_to_string(&path) else {
                 continue;
             };
@@ -512,6 +500,16 @@ fn excluded(matcher: &ignore::overrides::Override, root: &Path, file: &Path) -> 
     file.ancestors()
         .take_while(|path| *path != root)
         .any(|path| matcher.matched(path, path.is_dir()).is_ignore())
+}
+
+fn exclusion_matcher(root: &Path, patterns: &[String]) -> io::Result<ignore::overrides::Override> {
+    let mut builder = OverrideBuilder::new(root);
+    for pattern in patterns {
+        builder
+            .add(&format!("!{pattern}"))
+            .map_err(io::Error::other)?;
+    }
+    builder.build().map_err(io::Error::other)
 }
 
 /// Returns the recognized CI files of each project, sorted. A project is `root` or a folder up
