@@ -111,6 +111,60 @@ fn configured_custom_gitlab_file_uses_gitlab_parser() {
     assert!(text.contains("unpinned node:18"), "{text}");
 }
 
+/// Custom GitLab CI paths must be recognized by content when `.gitlab-ci.yml` is absent.
+#[test]
+fn custom_gitlab_path_without_root_ci_is_scanned_by_content() {
+    let ci = concat!(
+        "include:\n",
+        "  - project: group/project\n",
+        "    ref: main\n",
+        "    file: /ci.yml\n",
+        "image: node:18\n",
+    );
+    let root = tree(
+        "custom-gitlab-no-root",
+        &[(".gitlab/workflows/build.yml", ci)],
+    );
+
+    let discovered = lint(&root, &["--platform", "gitlab"]);
+    assert_eq!(
+        discovered.status.code(),
+        Some(2),
+        "default discovery should still skip custom paths: {}",
+        stderr(&discovered)
+    );
+    assert!(
+        stderr(&discovered).contains("no supported CI files found"),
+        "{}",
+        stderr(&discovered)
+    );
+
+    let explicit = lint(
+        &root,
+        &[".gitlab/workflows/build.yml", "--platform", "gitlab"],
+    );
+    assert_eq!(explicit.status.code(), Some(1), "{}", stderr(&explicit));
+    let text = stdout(&explicit);
+    assert!(text.contains("unpinned group/project@main"), "{text}");
+    assert!(text.contains("unpinned node:18"), "{text}");
+
+    let by_path = lint(
+        &root,
+        &[
+            "--path",
+            root.join(".gitlab/workflows/build.yml")
+                .to_str()
+                .expect("utf-8 path"),
+            "--platform",
+            "gitlab",
+        ],
+    );
+    assert_eq!(by_path.status.code(), Some(1), "{}", stderr(&by_path));
+    let text = stdout(&by_path);
+    assert!(text.contains("unpinned group/project@main"), "{text}");
+    assert!(text.contains("unpinned node:18"), "{text}");
+}
+
 #[test]
 fn configured_globs_select_gitlab_files_and_explicit_paths() {
     let root = tree(

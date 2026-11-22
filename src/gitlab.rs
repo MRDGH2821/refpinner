@@ -4,6 +4,50 @@ use saphyr_parser::{Event, Parser};
 use crate::github::{byte_offset, value_span, warning};
 use crate::reference::{Kind, Reference, State};
 
+/// Whether `source` looks like a GitLab CI configuration (not GitHub Actions / compose).
+pub fn is_ci(source: &str) -> bool {
+    let Ok(documents) = MarkedYaml::load_from_str(source) else {
+        return false;
+    };
+    const KEYS: &[&str] = &[
+        "include",
+        "stages",
+        "workflow",
+        "default",
+        "image",
+        "before_script",
+        "after_script",
+    ];
+    for document in documents {
+        let Some(mapping) = document.data.as_mapping() else {
+            continue;
+        };
+        // GitHub Actions uses top-level `on`; do not treat those documents as GitLab CI.
+        if mapping
+            .keys()
+            .any(|key| matches!(key.data.as_str(), Some("on")))
+        {
+            continue;
+        }
+        for (key, value) in mapping {
+            let Some(name) = key.data.as_str() else {
+                continue;
+            };
+            if KEYS.contains(&name) {
+                return true;
+            }
+            // GitLab `services` is a sequence; Compose uses a mapping of containers.
+            if name == "services" && value.data.as_sequence().is_some() {
+                return true;
+            }
+            if value.data.as_mapping_get("script").is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Plans the pin of a selected project ref, keeping quotes, comments and track metadata.
 pub fn plan(
     source: &str,
@@ -256,4 +300,24 @@ pub fn references(source: &str) -> Result<Vec<Reference>, ScanError> {
     }
     references.sort_by_key(|r| (r.line, r.column));
     Ok(references)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_ci;
+
+    #[test]
+    fn detects_gitlab_markers_and_rejects_actions_and_compose() {
+        assert!(is_ci(
+            "include:\n  - project: group/project\n    ref: main\n    file: /ci.yml\n"
+        ));
+        assert!(is_ci("image: alpine:3.19\n"));
+        assert!(is_ci("build:\n  script:\n    - make\n"));
+        assert!(is_ci("services:\n  - postgres:15\n"));
+        assert!(!is_ci(
+            "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        ));
+        assert!(!is_ci("services:\n  web:\n    image: nginx\n"));
+        assert!(!is_ci("name: not ci\n"));
+    }
 }
