@@ -119,7 +119,7 @@ pub fn apply(
         let mut values = Vec::new();
         let mut changes = Vec::new();
         for reference in &references {
-            if !input.settings.includes(reference, scan.include_excluded) {
+            if !input.settings.includes(reference, scan.scan_excluded) {
                 continue;
             }
             let location = format!("{shown}:{}:{}", reference.line, reference.column);

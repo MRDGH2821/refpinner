@@ -139,6 +139,28 @@ fn include_entries<'a>(document: &'a MarkedYaml<'a>) -> Option<Vec<&'a MarkedYam
     )
 }
 
+/// Returns local include paths; malformed YAML is reported by the normal scan.
+pub fn local_includes(source: &str) -> Vec<String> {
+    let Ok(documents) = MarkedYaml::load_from_str(source) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for document in &documents {
+        for entry in include_entries(document).unwrap_or_default() {
+            if let Some(path) = entry.data.as_str() {
+                if !path.starts_with("http://") && !path.starts_with("https://") {
+                    paths.push(path.to_owned());
+                }
+            } else if entry.data.as_mapping_get("project").is_none()
+                && let Some(local) = entry.data.as_mapping_get("local")
+            {
+                paths.push(local.data.as_str().unwrap_or("").to_owned());
+            }
+        }
+    }
+    paths
+}
+
 /// Finds the containing include mapping and copies its key indentation.
 fn context(source: &str, reference: &Reference) -> Result<(bool, usize), String> {
     for document in MarkedYaml::load_from_str(source).map_err(|e| e.to_string())? {

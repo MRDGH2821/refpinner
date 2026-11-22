@@ -89,10 +89,10 @@ impl Registry {
     }
 }
 
-/// Builds a fresh project under the Cargo test tmpdir; paths are relative to the project root.
+/// Builds a fresh project under the system temporary directory; paths are relative to the project root.
 fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("image")
+    let root = std::env::temp_dir()
+        .join(format!("refpinner-image-{}", std::process::id()))
         .join(name);
     let _ = std::fs::remove_dir_all(&root);
     for (file, body) in files {
@@ -857,6 +857,37 @@ fn update_applies_limits_and_reports_moved_exact_image_tags() {
         stderr(&output)
     );
     assert_eq!(stdout(&output), "");
+}
+
+#[test]
+fn update_writes_local_gitlab_include_with_backup() {
+    let original = format!("image: node:4.2.1@{V421}\n");
+    let root = project(
+        "image-update-local",
+        &[
+            (".gitlab-ci.yml", "include: /ci/build.yml\n"),
+            ("ci/build.yml", &original),
+        ],
+    );
+    let registry = Registry::new(node_versions());
+    let preview = refpinner(&root, &registry, &["update", "--patch"]);
+    assert_eq!(preview.status.code(), Some(0), "{}", stderr(&preview));
+    assert!(stdout(&preview).contains("4.2.1 -> 4.2.3"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml")).unwrap(),
+        original
+    );
+    let written = refpinner(&root, &registry, &["update", "--patch", "--write"]);
+    assert_eq!(written.status.code(), Some(0), "{}", stderr(&written));
+    assert!(
+        std::fs::read_to_string(root.join("ci/build.yml"))
+            .unwrap()
+            .contains("node:4.2.3@")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml.bkp")).unwrap(),
+        original
+    );
 }
 
 #[test]

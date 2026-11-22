@@ -30,10 +30,10 @@ fn setup_node() -> Vec<(&'static str, u16, &'static str)> {
     ]
 }
 
-/// Builds a fresh project under the Cargo test tmpdir; paths are relative to the project root.
+/// Builds a fresh project under the system temporary directory; paths are relative to the project root.
 fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("pin")
+    let root = std::env::temp_dir()
+        .join(format!("refpinner-pin-{}", std::process::id()))
         .join(name);
     let _ = std::fs::remove_dir_all(&root);
     for (file, body) in files {
@@ -74,6 +74,42 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn gitlab_local_include_is_previewed_and_written_with_backup() {
+    let ci =
+        "include:\n  - project: group/sub/project\n    ref: release/v1\n    file: /build.yml\n";
+    let root = project(
+        "gitlab-local-write",
+        &[
+            (".gitlab-ci.yml", "include: /ci/build.yml\n"),
+            ("ci/build.yml", ci),
+        ],
+    );
+    let forge = Forge::new(&[(
+        "/projects/group%2Fsub%2Fproject/repository/commits/release%2Fv1?stats=false",
+        200,
+        r#"{"id":"1111111111111111111111111111111111111111"}"#,
+    )]);
+    let preview = pin(&root, &forge);
+    assert_eq!(preview.status.code(), Some(0));
+    assert!(stdout(&preview).contains("ci/build.yml"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml")).unwrap(),
+        ci
+    );
+    let written = refpinner(&root, &forge, &["pin", "--write"]);
+    assert_eq!(written.status.code(), Some(0));
+    assert!(
+        std::fs::read_to_string(root.join("ci/build.yml"))
+            .unwrap()
+            .contains("1111111111111111111111111111111111111111")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml.bkp")).unwrap(),
+        ci
+    );
 }
 
 #[test]

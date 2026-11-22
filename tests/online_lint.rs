@@ -316,7 +316,7 @@ fn include_excluded_audits_excluded_references_online() {
     );
 
     let hidden = lint(&root, Some(&forge.url), &["--online"]);
-    let audit = lint(&root, Some(&forge.url), &["--online", "--include-excluded"]);
+    let audit = lint(&root, Some(&forge.url), &["--online", "--scan-excluded"]);
 
     assert_eq!(hidden.status.code(), Some(0), "{}", stderr(&hidden));
     assert!(

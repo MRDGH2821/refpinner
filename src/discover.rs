@@ -33,8 +33,8 @@ pub struct Scan {
     #[arg(long, env = "REFPINNER_PLATFORM")]
     platform: Option<crate::config::Platform>,
     /// Include references excluded by configuration, for an exclusion audit
-    #[arg(long, env = "REFPINNER_INCLUDE_EXCLUDED")]
-    pub include_excluded: bool,
+    #[arg(long, env = "REFPINNER_SCAN_EXCLUDED")]
+    pub scan_excluded: bool,
     /// Do not warn about symlinks found during discovery (accepts an explicit false)
     #[arg(long, env = "REFPINNER_NO_SYMLINK_WARNINGS", num_args = 0..=1, default_missing_value = "true", require_equals = true)]
     no_symlink_warnings: Option<bool>,
@@ -47,6 +47,7 @@ pub struct Input {
     pub path: PathBuf,
     pub settings: crate::config::Settings,
     pub platform: crate::config::Platform,
+    settings_root: PathBuf,
 }
 
 /// A skipped symlink or backup discovered while selecting files.
@@ -152,27 +153,19 @@ impl Scan {
             } else {
                 &root
             };
-            let mut builder = OverrideBuilder::new(exclude_root);
-            for pattern in excludes {
-                builder
-                    .add(&format!("!{pattern}"))
-                    .map_err(io::Error::other)?;
-            }
-            let matcher = builder.build().map_err(io::Error::other)?;
+            let matcher = exclusion_matcher(exclude_root, excludes)?;
             for file in &candidates {
                 if !explicit_only && project_for(&root, file) != project {
                     continue;
                 }
-                if !explicit_only
-                    && !self.include_excluded
-                    && excluded(&matcher, exclude_root, file)
-                {
+                if !explicit_only && !self.scan_excluded && excluded(&matcher, exclude_root, file) {
                     continue;
                 }
                 selected.push(Input {
                     path: file.clone(),
                     settings: settings.clone(),
                     platform: platform(file),
+                    settings_root: project.clone(),
                 });
             }
             {
@@ -181,6 +174,13 @@ impl Scan {
                     warnings.extend(skips);
                     for path in paths {
                         let path = path.canonicalize().unwrap_or(path);
+                        if file.platform == crate::config::Platform::Gitlab
+                            && !explicit_only
+                            && !self.scan_excluded
+                            && excluded(&matcher, exclude_root, &path)
+                        {
+                            continue;
+                        }
                         if explicit_only
                             && !candidates.iter().any(|candidate| {
                                 candidate
@@ -202,6 +202,7 @@ impl Scan {
                             path,
                             settings: settings.clone(),
                             platform: file.platform,
+                            settings_root: project.clone(),
                         });
                     }
                 }
@@ -215,12 +216,181 @@ impl Scan {
                 .as_ref()
                 .is_none_or(|platforms| platforms.contains(&input.platform)),
         });
+        self.follow_gitlab_includes(&root, &mut selected, &mut warnings)?;
         selected.sort_by(|a, b| a.path.cmp(&b.path));
-        selected.dedup_by(|a, b| a.path == b.path);
+        selected.dedup_by(|a, b| a.path == b.path && a.platform == b.platform);
         Ok(Discovery {
             files: selected,
             warnings,
         })
+    }
+
+    fn follow_gitlab_includes(
+        &self,
+        scan_root: &Path,
+        selected: &mut Vec<Input>,
+        warnings: &mut Vec<Skip>,
+    ) -> io::Result<()> {
+        use crate::config::Platform;
+        let mut seen = std::collections::HashSet::new();
+        let mut index = 0;
+        while index < selected.len() {
+            let input = &selected[index];
+            index += 1;
+            if input.platform != Platform::Gitlab {
+                continue;
+            }
+            let path = input
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| input.path.clone());
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let mut git = std::process::Command::new("git");
+            git.arg("-C")
+                .arg(path.parent().unwrap_or(scan_root))
+                .args(["rev-parse", "--show-toplevel"]);
+            for key in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_COMMON_DIR",
+            ] {
+                git.env_remove(key);
+            }
+            let project = git
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .map(|root| PathBuf::from(root.trim()))
+                .unwrap_or_else(|| scan_root.to_path_buf());
+            let settings = input.settings.clone();
+            let settings_root = input.settings_root.clone();
+            let excludes = if self.exclude.is_empty() {
+                settings.exclude.as_deref().unwrap_or_default()
+            } else {
+                &self.exclude
+            };
+            let exclude_root = if self.exclude.is_empty() {
+                &settings_root
+            } else {
+                scan_root
+            };
+            let matcher = exclusion_matcher(exclude_root, excludes)?;
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for include in crate::gitlab::local_includes(&source) {
+                let relative = include.trim_start_matches('/');
+                let valid = !relative.is_empty()
+                    && !relative.contains('$')
+                    && Path::new(relative)
+                        .components()
+                        .all(|c| matches!(c, Component::Normal(_)));
+                let glob = if valid {
+                    globset::GlobBuilder::new(relative)
+                        .literal_separator(true)
+                        .build()
+                        .ok()
+                } else {
+                    None
+                };
+                let Some(glob) = glob else {
+                    warnings.push(Skip {
+                        path: include,
+                        message: "invalid or unresolved local include",
+                    });
+                    continue;
+                };
+                let mut matches = Vec::new();
+                if relative.contains(['*', '?', '[', '{']) {
+                    let matcher = glob.compile_matcher();
+                    let walk = WalkBuilder::new(&project)
+                        .hidden(false)
+                        .ignore(false)
+                        .git_ignore(false)
+                        .git_exclude(false)
+                        .filter_entry(|entry| {
+                            entry.depth() == 0
+                                || (entry.file_name() != ".git"
+                                    && !entry.file_type().is_some_and(|t| t.is_symlink())
+                                    && !(entry.file_type().is_some_and(|t| t.is_dir())
+                                        && entry.path().join(".git").exists()))
+                        })
+                        .build();
+                    for entry in walk {
+                        match entry {
+                            Ok(entry)
+                                if entry.file_type().is_some_and(|t| t.is_file())
+                                    && matcher.is_match(
+                                        entry.path().strip_prefix(&project).unwrap_or(entry.path()),
+                                    ) =>
+                            {
+                                matches.push(entry.into_path())
+                            }
+                            Err(_) => warnings.push(Skip {
+                                path: include.clone(),
+                                message: "cannot read local include",
+                            }),
+                            _ => {}
+                        }
+                    }
+                } else {
+                    let file = project.join(relative);
+                    let safe = file
+                        .strip_prefix(&project)
+                        .unwrap()
+                        .components()
+                        .scan(project.clone(), |p, c| {
+                            p.push(c);
+                            Some(p.clone())
+                        })
+                        .all(|p| {
+                            p.symlink_metadata()
+                                .is_ok_and(|m| !m.file_type().is_symlink())
+                                && (p == file || !p.join(".git").exists())
+                        });
+                    if safe && file.is_file() {
+                        matches.push(file);
+                    }
+                }
+                if matches.is_empty() {
+                    warnings.push(Skip {
+                        path: include,
+                        message: "local include not found or inaccessible",
+                    });
+                    continue;
+                }
+                for file in matches {
+                    if !self.scan_excluded && excluded(&matcher, exclude_root, &file) {
+                        continue;
+                    }
+                    if std::fs::read_to_string(&file).is_err() {
+                        warnings.push(Skip {
+                            path: display(&file),
+                            message: "cannot read local include",
+                        });
+                        continue;
+                    }
+                    if !selected.iter().any(|item| {
+                        item.platform == Platform::Gitlab
+                            && item.path.canonicalize().ok().as_ref()
+                                == file.canonicalize().ok().as_ref()
+                    }) {
+                        selected.push(Input {
+                            path: file,
+                            settings: settings.clone(),
+                            platform: Platform::Gitlab,
+                            settings_root: settings_root.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -330,6 +500,16 @@ fn excluded(matcher: &ignore::overrides::Override, root: &Path, file: &Path) -> 
     file.ancestors()
         .take_while(|path| *path != root)
         .any(|path| matcher.matched(path, path.is_dir()).is_ignore())
+}
+
+fn exclusion_matcher(root: &Path, patterns: &[String]) -> io::Result<ignore::overrides::Override> {
+    let mut builder = OverrideBuilder::new(root);
+    for pattern in patterns {
+        builder
+            .add(&format!("!{pattern}"))
+            .map_err(io::Error::other)?;
+    }
+    builder.build().map_err(io::Error::other)
 }
 
 /// Returns the recognized CI files of each project, sorted. A project is `root` or a folder up
