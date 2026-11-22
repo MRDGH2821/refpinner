@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file. See [conven
 
 ---
 
+## [0.2.0](https://github.com/MRDGH2821/refpinner/compare/v0.1.1..v0.2.0) - 2026-11-22
+
+### Bug Fixes
+
+- **(config)** isolate GitLab test projects from checkout - ([213ae5a](https://github.com/MRDGH2821/refpinner/commit/213ae5a694ade4fc96ddfd3ff33c0693ccf4480b)) - MRDGH2821
+- **(github)** recognize windows paths in file globs - ([27b7c7d](https://github.com/MRDGH2821/refpinner/commit/27b7c7de00d9baf542a0ea1dba7b427bbd088476)) - MRDGH2821
+- **(github)** use branch refs for CI checks - ([b419582](https://github.com/MRDGH2821/refpinner/commit/b419582d6577bccafe02e34a373e6d203b3ee84e)) - MRDGH2821
+- **(mise)** restore linux clang lock entries - ([a8f2a02](https://github.com/MRDGH2821/refpinner/commit/a8f2a02b4622eadec07886601783f720b4523a22)) - MRDGH2821
+- resolve file paths when project lives under .config - ([70363ad](https://github.com/MRDGH2821/refpinner/commit/70363adf78e678d0efd6060152592c96d068d37b)) - MRDGH2821
+
+### Features
+
+- **(config)** [**breaking**] follow local GitLab CI includes - ([fcefac0](https://github.com/MRDGH2821/refpinner/commit/fcefac0bc3f4bfbc5106f146ed9b1c851aa57d35)) - MRDGH2821
+- **(github)** select updates from a project-wide list - ([0ea705f](https://github.com/MRDGH2821/refpinner/commit/0ea705f170ee72dc37dd73338ac924878f917817)) - MRDGH2821
+- **(github)** select updates across projects - ([b9b7984](https://github.com/MRDGH2821/refpinner/commit/b9b7984971f831bb7132e2bb4e9dea37b689d346)) - MRDGH2821
+- **(github)** support configured file globs - ([ac666b4](https://github.com/MRDGH2821/refpinner/commit/ac666b4b1809411cc46383a21d8460adc9724c03)) - MRDGH2821
+- pin custom GitLab CI paths by content - ([520247f](https://github.com/MRDGH2821/refpinner/commit/520247ff61a587fa9362c29a7f9e187e35178689)) - MRDGH2821
+
+### Miscellaneous Chores
+
+- **(github)** merge main into update selection - ([c4ba17d](https://github.com/MRDGH2821/refpinner/commit/c4ba17d6fb57bb4304c3773f19bc0581ac591fe0)) - MRDGH2821
+- merge pull request #27 from MRDGH2821/MRDGH2821/feat/interactive-update-globs - ([80f69b6](https://github.com/MRDGH2821/refpinner/commit/80f69b6e62afe73171dccc6eb35a68201d58fb26)) - Mihir Rabade
+- merge pull request #26 from MRDGH2821/MRDGH2821/feat/interactive-update-selection - ([ee0a7dd](https://github.com/MRDGH2821/refpinner/commit/ee0a7dd46a32ca0938dd12e2f45ab503b8be498a)) - Mihir Rabade
+- merge pull request #30 from MRDGH2821/MRDGH2821/feat/schematic-config - ([5c2dcfe](https://github.com/MRDGH2821/refpinner/commit/5c2dcfeffc8adfdfd5baec8cea7976f7759b4a73)) - Mihir Rabade
+- merge pull request #31 from MRDGH2821/MRDGH2821/feat/gitlab-custom-ci-paths - ([72cd6b9](https://github.com/MRDGH2821/refpinner/commit/72cd6b9b7ff10a7b9566f51044446eaa64851595)) - Mihir Rabade
+- merge pull request #33 from MRDGH2821/MRDGH2821/feat/follow-local-gitlab-ci-includes - ([9b634bc](https://github.com/MRDGH2821/refpinner/commit/9b634bcaad3ee5746adb82f12e0b8bc60abe6601)) - Mihir Rabade
+
+### Refactoring
+
+- **(config)** load configuration with schematic - ([dd6bdd5](https://github.com/MRDGH2821/refpinner/commit/dd6bdd5754c835cf8d855a44eed79c7f9fcb4933)) - MRDGH2821
+- **(config)** reuse exclusion matcher construction - ([bd1dd0f](https://github.com/MRDGH2821/refpinner/commit/bd1dd0f943e8e92e8649079c86c32a8c46a66339)) - MRDGH2821
+
+---
+
 ## [0.1.1](https://github.com/MRDGH2821/refpinner/compare/v0.1.0..v0.1.1) - 2026-11-18
 
 ### Bug Fixes
