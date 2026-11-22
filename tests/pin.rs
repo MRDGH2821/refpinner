@@ -77,6 +77,42 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn gitlab_local_include_is_previewed_and_written_with_backup() {
+    let ci =
+        "include:\n  - project: group/sub/project\n    ref: release/v1\n    file: /build.yml\n";
+    let root = project(
+        "gitlab-local-write",
+        &[
+            (".gitlab-ci.yml", "include: /ci/build.yml\n"),
+            ("ci/build.yml", ci),
+        ],
+    );
+    let forge = Forge::new(&[(
+        "/projects/group%2Fsub%2Fproject/repository/commits/release%2Fv1?stats=false",
+        200,
+        r#"{"id":"1111111111111111111111111111111111111111"}"#,
+    )]);
+    let preview = pin(&root, &forge);
+    assert_eq!(preview.status.code(), Some(0));
+    assert!(stdout(&preview).contains("ci/build.yml"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml")).unwrap(),
+        ci
+    );
+    let written = refpinner(&root, &forge, &["pin", "--write"]);
+    assert_eq!(written.status.code(), Some(0));
+    assert!(
+        std::fs::read_to_string(root.join("ci/build.yml"))
+            .unwrap()
+            .contains("1111111111111111111111111111111111111111")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml.bkp")).unwrap(),
+        ci
+    );
+}
+
+#[test]
 fn gitlab_selected_ref_preview_and_write_preserve_source_and_track() {
     let ci = concat!(
         "# café\r\n",

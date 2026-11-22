@@ -57,6 +57,166 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn follows_nested_local_gitlab_includes_once() {
+    let root = tree(
+        "gitlab-local-includes",
+        &[
+            (
+                ".gitlab-ci.yml",
+                "include:\n  - local: /ci/*.yml\n  - ci/a.yml\n",
+            ),
+            (
+                "ci/a.yml",
+                "include: /ci/nested/b.yml\nimage: alpine:3.19\n",
+            ),
+            (
+                "ci/nested/b.yml",
+                "include: /ci/a.yml\nimage: busybox:1.36\n",
+            ),
+        ],
+    );
+    let output = lint(&root);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output).matches("alpine:3.19").count(), 1);
+    assert_eq!(stdout(&output).matches("busybox:1.36").count(), 1);
+}
+
+#[test]
+fn local_includes_respect_exclusions_and_warn_without_stopping() {
+    let root = tree(
+        "gitlab-local-exclusions",
+        &[
+            (
+                ".gitlab-ci.yml",
+                "include:\n  - local: /ci/skip.yml\n    rules:\n      - when: never\n  - /missing.yml\n  - /$VARIABLE\n  - https://example.com/ci.yml\n  - /ci/ok.yml\n",
+            ),
+            (
+                "ci/skip.yml",
+                "include: /ci/nested.yml\nimage: alpine:3.19\n",
+            ),
+            ("ci/nested.yml", "image: busybox:1.36\n"),
+            ("ci/ok.yml", "image: redis:7\n"),
+        ],
+    );
+    let output = lint_with(&root, &["--exclude", "ci/skip.yml"]);
+    let text = stdout(&output);
+    assert!(text.contains("redis:7"));
+    assert!(!text.contains("alpine:3.19"));
+    assert!(!text.contains("busybox:1.36"));
+    assert!(text.contains("missing.yml: warning"));
+    assert!(text.contains("$VARIABLE"));
+    assert!(text.contains("unsupported remote include"));
+    let output = lint_with(&root, &["--exclude", "ci/skip.yml", "--scan-excluded"]);
+    assert!(stdout(&output).contains("alpine:3.19"));
+    assert!(stdout(&output).contains("busybox:1.36"));
+}
+
+#[test]
+fn invalid_included_yaml_does_not_stop_other_files() {
+    let root = tree(
+        "gitlab-local-invalid",
+        &[
+            (".gitlab-ci.yml", "include: [ci/bad.yml, ci/good.yml]\n"),
+            ("ci/bad.yml", "image: [unterminated\n"),
+            ("ci/good.yml", "image: redis:7\n"),
+        ],
+    );
+    let output = lint(&root);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("ci/bad.yml"));
+    assert!(stdout(&output).contains("redis:7"));
+}
+
+#[test]
+fn explicit_gitlab_file_resolves_includes_from_git_root() {
+    let root = tree(
+        "gitlab-local-git-root",
+        &[
+            ("ci/entry.yml", "include: [/ci/child.yml, ../outside.yml]\n"),
+            ("ci/child.yml", "image: redis:7\n"),
+        ],
+    );
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = lint_with(&root.join("ci"), &["entry.yml"]);
+    assert!(stdout(&output).contains("redis:7"));
+    assert!(stdout(&output).contains("invalid or unresolved local include"));
+}
+
+#[test]
+fn include_exclusions_are_relative_to_scan_configuration() {
+    let root = tree(
+        "gitlab-local-config-root",
+        &[
+            ("ci/.gitlab-ci.yml", "include: /ci/child.yml\n"),
+            ("ci/refpinner.toml", "exclude = ['child.yml']\n"),
+            ("ci/child.yml", "image: redis:7\n"),
+        ],
+    );
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = lint(&root.join("ci"));
+    assert!(!stdout(&output).contains("redis:7"));
+    let audit = lint_with(&root.join("ci"), &["--scan-excluded"]);
+    assert!(stdout(&audit).contains("redis:7"));
+}
+
+#[test]
+fn old_exclusion_flag_is_rejected() {
+    let root = tree(
+        "gitlab-old-exclude-flag",
+        &[(".gitlab-ci.yml", "stages: [test]\n")],
+    );
+    assert_eq!(
+        lint_with(&root, &["--include-excluded"]).status.code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn exclusion_override_uses_new_environment_name() {
+    let root = tree(
+        "gitlab-exclude-environment",
+        &[
+            (".gitlab-ci.yml", "include: /ci/child.yml\n"),
+            ("ci/child.yml", "image: redis:7\n"),
+        ],
+    );
+    let run = |name: &str| {
+        Command::new(env!("CARGO_BIN_EXE_refpinner"))
+            .args(["lint", "--exclude", "ci/child.yml"])
+            .env_remove("REFPINNER_SCAN_EXCLUDED")
+            .env_remove("REFPINNER_INCLUDE_EXCLUDED")
+            .env(name, "true")
+            .current_dir(&root)
+            .output()
+            .unwrap()
+    };
+    assert!(stdout(&run("REFPINNER_SCAN_EXCLUDED")).contains("redis:7"));
+    assert!(!stdout(&run("REFPINNER_INCLUDE_EXCLUDED")).contains("redis:7"));
+}
+
+#[test]
 fn unpinned_action_fails_and_reports_each_location() {
     let output = lint(&fixture("mixed"));
 
@@ -558,6 +718,8 @@ fn gitlab_project_includes_are_reported_and_unsupported_includes_warn() {
     assert_eq!(
         stdout(&output),
         concat!(
+            "/ci/build.yml: warning: local include not found or inaccessible\n",
+            "ci/test.yml: warning: local include not found or inaccessible\n",
             ".gitlab-ci.yml:4:5: warning unsupported remote include https://example.com/ci.yml\n",
             ".gitlab-ci.yml:5:13: warning unsupported remote include https://example.com/remote.yml\n",
             ".gitlab-ci.yml:6:15: warning unsupported template include Auto-DevOps.gitlab-ci.yml\n",

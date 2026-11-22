@@ -109,13 +109,17 @@ files = [{ path = ".gitlab/workflows/*.yml", platform = "gitlab" }]
 Parents load in `extends` order. Later parents override earlier parents, and the child overrides all parents.
 Lists replace earlier lists, including an empty list. Paths in `extends` are relative to the file that declares them.
 File exclusion globs are relative to the project root. Reference and suppression patterns use glob syntax.
-Use `refpinner lint --include-excluded` to audit excluded files and references.
+Use `refpinner lint --scan-excluded` to audit excluded files and references.
+
+GitLab CI local includes are scanned recursively from the Git project root, or from
+the scan directory outside a Git repository. Exclusions also apply to included
+files. Missing and unsupported includes produce warnings; remote files are not fetched.
 Suppression hides warning output but does not make YAML aliases safe to edit.
 
 Explicit CLI values override environment values, which override configuration values and built-in defaults.
 An explicit `--minor` also overrides a configured patch limit. The default update limit is `minor`.
 The supported environment variables are `REFPINNER_CONFIG`, `REFPINNER_PATH`, `REFPINNER_EXCLUDE` (comma-separated), `REFPINNER_PLATFORM`,
-`REFPINNER_NO_SYMLINK_WARNINGS`, `REFPINNER_INCLUDE_EXCLUDED`, and `REFPINNER_UPDATE_LIMIT` (`major`, `minor`, or `patch`).
+`REFPINNER_NO_SYMLINK_WARNINGS`, `REFPINNER_SCAN_EXCLUDED`, and `REFPINNER_UPDATE_LIMIT` (`major`, `minor`, or `patch`).
 Use `--no-symlink-warnings=false` to override a true environment or configuration value.
 Existing forge API environment variables remain available.
 

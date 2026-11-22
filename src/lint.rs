@@ -98,7 +98,7 @@ pub fn run(scan: &Scan, options: &Options, actions: &Actions) -> ExitCode {
             }
         };
         for reference in refs {
-            if !input.settings.includes(&reference, scan.include_excluded) {
+            if !input.settings.includes(&reference, scan.scan_excluded) {
                 continue;
             }
             let finding = match reference.state {

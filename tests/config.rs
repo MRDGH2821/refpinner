@@ -510,7 +510,7 @@ fn reference_rules_filter_lint_and_suppress_warnings_last_match_wins() {
     );
     let output = lint(&root, &[]);
     assert_eq!(stdout(&output), unpinned(".github/workflows/ci.yml"));
-    let audit = lint(&root, &["--include-excluded"]);
+    let audit = lint(&root, &["--scan-excluded"]);
     assert!(stdout(&audit).contains("owner/other@v1"));
 }
 

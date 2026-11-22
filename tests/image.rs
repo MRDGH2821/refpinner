@@ -860,6 +860,37 @@ fn update_applies_limits_and_reports_moved_exact_image_tags() {
 }
 
 #[test]
+fn update_writes_local_gitlab_include_with_backup() {
+    let original = format!("image: node:4.2.1@{V421}\n");
+    let root = project(
+        "image-update-local",
+        &[
+            (".gitlab-ci.yml", "include: /ci/build.yml\n"),
+            ("ci/build.yml", &original),
+        ],
+    );
+    let registry = Registry::new(node_versions());
+    let preview = refpinner(&root, &registry, &["update", "--patch"]);
+    assert_eq!(preview.status.code(), Some(0), "{}", stderr(&preview));
+    assert!(stdout(&preview).contains("4.2.1 -> 4.2.3"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml")).unwrap(),
+        original
+    );
+    let written = refpinner(&root, &registry, &["update", "--patch", "--write"]);
+    assert_eq!(written.status.code(), Some(0), "{}", stderr(&written));
+    assert!(
+        std::fs::read_to_string(root.join("ci/build.yml"))
+            .unwrap()
+            .contains("node:4.2.3@")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("ci/build.yml.bkp")).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn update_preserves_variants_and_skips_ambiguous_compound_upgrades() {
     let source = format!("image: node:4.2.1-alpine@{V421}\n");
     let root = project("image-variant", &[(".gitlab-ci.yml", &source)]);
