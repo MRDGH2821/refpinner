@@ -20,9 +20,11 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-/// Builds a fresh project under the Cargo test tmpdir with the given workflow files.
+/// Builds a fresh project under the system temporary directory with the given workflow files.
 fn project(name: &str, workflows: &[(&str, &str)]) -> std::path::PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = std::env::temp_dir()
+        .join(format!("refpinner-lint-{}", std::process::id()))
+        .join(name);
     let _ = std::fs::remove_dir_all(&root);
     let dir = root.join(".github/workflows");
     std::fs::create_dir_all(&dir).expect("create project");
@@ -32,9 +34,11 @@ fn project(name: &str, workflows: &[(&str, &str)]) -> std::path::PathBuf {
     root
 }
 
-/// Builds a fresh folder under the Cargo test tmpdir with files at the given relative paths.
+/// Builds a fresh folder under the system temporary directory with files at the given relative paths.
 fn tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = std::env::temp_dir()
+        .join(format!("refpinner-lint-{}", std::process::id()))
+        .join(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("create tree");
     for (file, body) in files {

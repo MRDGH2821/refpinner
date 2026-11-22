@@ -89,10 +89,10 @@ impl Registry {
     }
 }
 
-/// Builds a fresh project under the Cargo test tmpdir; paths are relative to the project root.
+/// Builds a fresh project under the system temporary directory; paths are relative to the project root.
 fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("image")
+    let root = std::env::temp_dir()
+        .join(format!("refpinner-image-{}", std::process::id()))
         .join(name);
     let _ = std::fs::remove_dir_all(&root);
     for (file, body) in files {
