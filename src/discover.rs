@@ -247,28 +247,12 @@ impl Scan {
             if !seen.insert(path.clone()) {
                 continue;
             }
-            let mut git = std::process::Command::new("git");
-            git.arg("-C")
-                .arg(path.parent().unwrap_or(scan_root))
-                .args(["rev-parse", "--show-toplevel"]);
-            for key in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_OBJECT_DIRECTORY",
-                "GIT_COMMON_DIR",
-            ] {
-                git.env_remove(key);
-            }
-            let project = git
-                .output()
-                .ok()
-                .filter(|out| out.status.success())
-                .and_then(|out| String::from_utf8(out.stdout).ok())
-                .map(|root| PathBuf::from(root.trim()))
-                .unwrap_or_else(|| scan_root.to_path_buf());
+            // Local includes resolve against the scanned CI project root
+            // (`settings_root`), matching GitLab when that tree is the project —
+            // not the enclosing Git repository toplevel (Copier `template/`, etc.).
             let settings = input.settings.clone();
             let settings_root = input.settings_root.clone();
+            let project = settings_root.clone();
             let excludes = if self.exclude.is_empty() {
                 settings.exclude.as_deref().unwrap_or_default()
             } else {
