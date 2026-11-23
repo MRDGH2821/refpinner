@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file. See [conven
 
 ---
 
+## [0.2.1](https://github.com/MRDGH2821/refpinner/compare/v0.2.0..v0.2.1) - 2026-11-23
+
+### Bug Fixes
+
+- **(config)** resolve GitLab local includes from scan project root - ([f159eb2](https://github.com/MRDGH2821/refpinner/commit/f159eb228c6018d6e3a6c168a245d7cf7cadc72b)) - MRDGH2821
+
+### Miscellaneous Chores
+
+- merge pull request #35 from MRDGH2821/MRDGH2821/fix/gitlab-include-settings-root - ([accc21a](https://github.com/MRDGH2821/refpinner/commit/accc21a413b3965a0b4f0f59d146c74f2bfa5b70)) - Mihir Rabade
+
+---
+
 ## [0.2.0](https://github.com/MRDGH2821/refpinner/compare/v0.1.1..v0.2.0) - 2026-11-22
 
 ### Bug Fixes

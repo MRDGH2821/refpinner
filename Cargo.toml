@@ -1,6 +1,6 @@
 [package]
 name = "refpinner"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Local-first CI dependency pinning and updates"
 repository = "https://github.com/MRDGH2821/refpinner"
