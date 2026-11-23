@@ -131,13 +131,55 @@ fn invalid_included_yaml_does_not_stop_other_files() {
     assert!(stdout(&output).contains("redis:7"));
 }
 
+/// Copier-style layout: CI project root is `template/`, but Git toplevel is the parent.
+/// Local includes must resolve against the scanned project (`settings_root`), not
+/// `git rev-parse --show-toplevel`.
 #[test]
-fn explicit_gitlab_file_resolves_includes_from_git_root() {
+fn local_includes_resolve_under_scan_project_when_nested_in_git_repo() {
     let root = tree(
-        "gitlab-local-git-root",
+        "gitlab-copier-template-include",
         &[
-            ("ci/entry.yml", "include: [/ci/child.yml, ../outside.yml]\n"),
+            (
+                "template/.gitlab-ci.yml",
+                "include:\n  local: .gitlab/workflows/*.yml\n",
+            ),
+            ("template/.gitlab/workflows/job.yml", "image: alpine:3.19\n"),
+        ],
+    );
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = lint_with(&root.join("template"), &["--platform", "gitlab"]);
+    let text = stdout(&output);
+    assert!(
+        !text.contains("local include not found or inaccessible"),
+        "unexpected warning output: {text:?}"
+    );
+    assert!(
+        text.contains("alpine:3.19"),
+        "included workflow was not scanned: {text:?}"
+    );
+}
+
+/// Explicit nested CI file: `/`-style includes resolve against the scan project root,
+/// not the enclosing Git repository toplevel.
+#[test]
+fn explicit_gitlab_file_resolves_includes_from_scan_project() {
+    let root = tree(
+        "gitlab-local-scan-project",
+        &[
+            ("ci/entry.yml", "include: [/child.yml, ../outside.yml]\n"),
             ("ci/child.yml", "image: redis:7\n"),
+            ("child.yml", "image: alpine:3.19\n"),
         ],
     );
     assert!(
@@ -153,8 +195,16 @@ fn explicit_gitlab_file_resolves_includes_from_git_root() {
             .success()
     );
     let output = lint_with(&root.join("ci"), &["entry.yml"]);
-    assert!(stdout(&output).contains("redis:7"));
-    assert!(stdout(&output).contains("invalid or unresolved local include"));
+    let text = stdout(&output);
+    assert!(
+        text.contains("redis:7"),
+        "include should resolve under scan project: {text:?}"
+    );
+    assert!(
+        !text.contains("alpine:3.19"),
+        "include must not resolve against Git toplevel: {text:?}"
+    );
+    assert!(text.contains("invalid or unresolved local include"));
 }
 
 #[test]
@@ -162,22 +212,10 @@ fn include_exclusions_are_relative_to_scan_configuration() {
     let root = tree(
         "gitlab-local-config-root",
         &[
-            ("ci/.gitlab-ci.yml", "include: /ci/child.yml\n"),
+            ("ci/.gitlab-ci.yml", "include: /child.yml\n"),
             ("ci/refpinner.toml", "exclude = ['child.yml']\n"),
             ("ci/child.yml", "image: redis:7\n"),
         ],
-    );
-    assert!(
-        Command::new("git")
-            .args(["init", "-q"])
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .current_dir(&root)
-            .status()
-            .unwrap()
-            .success()
     );
     let output = lint(&root.join("ci"));
     assert!(!stdout(&output).contains("redis:7"));
